@@ -6,6 +6,8 @@ try:
 except ImportError:
     from .server import serve
 
+__version__ = "0.1.0"
+
 
 @click.command()
 @click.option("-v", "--verbose", count=True)
