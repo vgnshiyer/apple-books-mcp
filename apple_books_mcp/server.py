@@ -77,9 +77,8 @@ def get_book_annotations(book_id: str) -> TextContent:
     """
     book = apple_books.get_book_by_id(book_id)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n \
-        Chapter: {annotation.chapter} - Location: {annotation.location} | \
-        Modified: {annotation.modification_date}\n"
+        f"{str(annotation)}\n\
+        Chapter: {annotation.chapter} - Location: {annotation.location} | Modified: {annotation.modification_date}\n"
         for annotation in book.annotations
     ])
     return TextContent(
@@ -109,8 +108,7 @@ def list_all_annotations() -> TextContent:
     """List all my annotations in my Apple Books library."""
     annotations = apple_books.list_annotations()
     annotations_str = "\n".join([
-        f"ID: {annotation.id} - Selected Text: {annotation.selected_text}\n \
-        Book: {annotation.book.title} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"ID: {annotation.id} - Selected Text: {annotation.selected_text}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -129,8 +127,8 @@ def get_highlights_by_color(color: str) -> TextContent:
     """
     annotations = apple_books.get_annotations_by_color(color)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n \
-        Book: {annotation.book.title} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{str(annotation)}\n\
+        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -149,8 +147,8 @@ def search_highlighted_text(text: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_highlighted_text(text)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n \
-        Book: {annotation.book.title} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{str(annotation)}\n\
+        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -160,7 +158,7 @@ def search_highlighted_text(text: str) -> TextContent:
 
 
 @mcp.tool()
-def search_annotation_by_note(note: str) -> TextContent:
+def search_notes(note: str) -> TextContent:
     """
     Search for annotations by note.
 
@@ -169,8 +167,8 @@ def search_annotation_by_note(note: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_note(note)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n \
-        Book: {annotation.book.title} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{str(annotation)}\n\
+        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -189,8 +187,8 @@ def full_text_search(text: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_text(text)
     annotations_str = "\n".join([
-        f"ID: {annotation.id} - Selected Text: {annotation.selected_text}\n \
-        Book: {annotation.book.title} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{str(annotation)}\n\
+        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -204,11 +202,11 @@ def recent_annotations() -> TextContent:
     """
     Get 10 most recent annotations.
     """
-    annotations = apple_books.list_annotations()
+    annotations = [annotation for annotation in apple_books.list_annotations() if annotation.creation_date]
     annotations.sort(key=lambda x: x.creation_date, reverse=True)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n \
-        Book: {annotation.book.title} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{str(annotation)}\n\
+        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
         for annotation in annotations[:10]
     ])
     return TextContent(

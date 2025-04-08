@@ -1,7 +1,10 @@
 import click
 import logging
 import sys
-from server import serve
+try:
+    from server import serve
+except ImportError:
+    from .server import serve
 
 
 @click.command()
