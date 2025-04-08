@@ -22,7 +22,7 @@ jobs:
           curl -Ls https://astral.sh/uv/install.sh | sh
           echo "$HOME/.cargo/bin" >> $GITHUB_PATH
 
-      - name: Install build tools with uv
+      - name: Setup virtual environment and install dependencies
         run: |
           uv venv
           uv pip install build twine
@@ -33,9 +33,7 @@ jobs:
 
       - name: Publish package
         run: |
-          uv pip install twine
           twine upload dist/*
         env:
           TWINE_USERNAME: __token__
           TWINE_PASSWORD: ${{ secrets.PYPI_API_TOKEN }}
-        
