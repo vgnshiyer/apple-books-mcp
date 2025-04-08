@@ -44,6 +44,7 @@ And much more!
 [uvx](https://docs.astral.sh/uv/guides/tools/) can be used to directly run apple-books-mcp (without installing it).
 
 ```bash
+brew install uv  # for macos
 uvx apple-books-mcp
 ```
 

@@ -202,12 +202,11 @@ def recent_annotations() -> TextContent:
     """
     Get 10 most recent annotations.
     """
-    annotations = [annotation for annotation in apple_books.list_annotations() if annotation.creation_date]
-    annotations.sort(key=lambda x: x.creation_date, reverse=True)
+    annotations = apple_books.list_annotations(limit=10, order_by="-creation_date")
     annotations_str = "\n".join([
         f"{str(annotation)}\n\
         Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
-        for annotation in annotations[:10]
+        for annotation in annotations
     ])
     return TextContent(
         type="text",
