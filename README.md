@@ -7,7 +7,17 @@ Model Context Protocol (MCP) server for Apple Books.
 [![](https://img.shields.io/badge/Follow-vgnshiyer-0A66C2?logo=linkedin)](https://www.linkedin.com/comm/mynetwork/discovery-see-all?usecase=PEOPLE_FOLLOWS&followMember=vgnshiyer)
 [![Buy Me A Coffee](https://img.shields.io/badge/Buy%20Me%20A%20Coffee-Donate-yellow.svg?logo=buymeacoffee)](https://www.buymeacoffee.com/vgnshiyer)
 
+## At a glance
+
+* Ask Claude to summarize your recent highlights
+* Ask Claude to search your highlights by color
+* Ask Claude to organize books in your library by genre
+* Ask Claude to recommend similar books based on your reading history
+* Ask Claude to compare notes from different books read on the same subject
+
 <!-- ## Feature Demo -->
+
+And much more!
 
 ## Available Tools
 
