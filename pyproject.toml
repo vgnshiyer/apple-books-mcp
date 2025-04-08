@@ -1,6 +1,6 @@
 [project]
 name = "apple-books-mcp"
-version = "0.1.0"
+version = "0.1.1"
 description = "Model Context Protocol (MCP) server for Apple Books"
 readme = "README.md"
 requires-python = ">=3.10"
@@ -17,7 +17,7 @@ classifiers = [
 dependencies = [
     "click>=8.1.8",
     "fastmcp>=0.4.1",
-    "py-apple-books>=1.2.0",
+    "py-apple-books>=1.2.1",
 ]
 
 [tool.uv]
