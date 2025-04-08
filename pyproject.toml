@@ -1,10 +1,35 @@
 [project]
 name = "apple-books-mcp"
 version = "0.1.0"
-description = "Add your description here"
+description = "Model Context Protocol (MCP) server for Apple Books"
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.10"
+license = { text = "Apache 2.0" }
+authors = [ { name="Vignesh Iyer", email="vgnshiyer@gmail.com" } ]
+keywords = [ "apple-books", "mcp", "model-context-protocol", "apple-books-mcp", "llm", "productivity" ]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+]
 dependencies = [
     "click>=8.1.8",
     "fastmcp>=0.4.1",
+    "py-apple-books>=1.2.0",
 ]
+
+[tool.uv]
+dev-dependencies = [
+    "pytest>=8.3.5",
+]
+
+[project.scripts]
+apple-books-mcp = "apple_books_mcp:main"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = "test_*.py"
+python_classes = "Test*"
+python_functions = "test_*"
