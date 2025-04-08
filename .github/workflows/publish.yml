@@ -1,9 +1,9 @@
 name: Publish Python package 📦 to PyPI
 
 on:
-  release:
-    types: [published]
-
+  push:
+    branches:
+      - main
 
 jobs:
   build-and-publish:
