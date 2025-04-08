@@ -1,7 +1,7 @@
 import click
 import logging
 import sys
-from .server import serve
+from server import serve
 
 
 @click.command()
