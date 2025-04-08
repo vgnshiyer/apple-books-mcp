@@ -24,6 +24,7 @@ jobs:
 
       - name: Install build tools with uv
         run: |
+          uv venv
           uv pip install build twine
 
       - name: Build the package
