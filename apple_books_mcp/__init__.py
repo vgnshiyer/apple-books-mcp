@@ -3,10 +3,10 @@ import logging
 import sys
 try:
     from server import serve
-except ImportError:
+except Exception:
     from .server import serve
 
-__version__ = "0.1.1"
+__version__ = "0.1.3"
 
 
 @click.command()

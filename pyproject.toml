@@ -1,9 +1,9 @@
 [project]
 name = "apple-books-mcp"
-version = "0.1.1"
+version = "0.1.3"
 description = "Model Context Protocol (MCP) server for Apple Books"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.13"
 license = { text = "Apache 2.0" }
 authors = [ { name="Vignesh Iyer", email="vgnshiyer@gmail.com" } ]
 keywords = [ "apple-books", "mcp", "model-context-protocol", "apple-books-mcp", "llm", "productivity" ]
@@ -12,7 +12,7 @@ classifiers = [
     "Intended Audience :: Developers",
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.13",
 ]
 dependencies = [
     "click>=8.1.8",

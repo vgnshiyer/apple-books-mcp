@@ -1,6 +1,6 @@
 try:
     from __init__ import main
-except ImportError:
+except Exception:
     from .__init__ import main
 
 main()

@@ -28,7 +28,7 @@ wheels = [
 
 [[package]]
 name = "apple-books-mcp"
-version = "0.1.0"
+version = "0.1.1"
 source = { virtual = "." }
 dependencies = [
     { name = "click" },
@@ -45,7 +45,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1.8" },
     { name = "fastmcp", specifier = ">=0.4.1" },
-    { name = "py-apple-books", specifier = ">=1.2.0" },
+    { name = "py-apple-books", specifier = ">=1.2.1" },
 ]
 
 [package.metadata.requires-dev]
@@ -231,11 +231,11 @@ wheels = [
 
 [[package]]
 name = "py-apple-books"
-version = "1.2.0"
+version = "1.2.1"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/99/39/611fd4147fe26d1e3ad847858e773c9fe226bce4df221e3b82cee58b7b33/py_apple_books-1.2.0.tar.gz", hash = "sha256:e7773b26617210fb769674680ca7e998143a675fc53c621351ce546fe650cb76", size = 12540 }
+sdist = { url = "https://files.pythonhosted.org/packages/b6/02/70dbd9004fe74b49f8ee0f7a6ed55048b7ee0b55ea819392f79b537d34e5/py_apple_books-1.2.1.tar.gz", hash = "sha256:543d5e9001e0d889eb647214a63a888650f92db9245dfaa1c73f16fd3cd2e695", size = 13155 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/93/62/b99cc86f291260cde89c1daadb38c49eb101d677ff693535ec4d3b03e8f1/py_apple_books-1.2.0-py3-none-any.whl", hash = "sha256:07719ae4404a0e54c5570e1fd0a9a1146d4b994980a6ceebe6019692891c3165", size = 14181 },
+    { url = "https://files.pythonhosted.org/packages/b9/4b/cc9bb6b29d28d2ac907a5bb36970ea6c35ef52e023273b9f98a3b4483791/py_apple_books-1.2.1-py3-none-any.whl", hash = "sha256:b76048c566a82406e829da2edf6a273687224c0a5366d3bd60689fb3b9492167", size = 15003 },
 ]
 
 [[package]]
