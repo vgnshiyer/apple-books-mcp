@@ -10,12 +10,9 @@ Model Context Protocol (MCP) server for Apple Books.
 ## At a glance
 
 * Ask Claude to summarize your recent highlights
-* Ask Claude to search your highlights by color
 * Ask Claude to organize books in your library by genre
 * Ask Claude to recommend similar books based on your reading history
 * Ask Claude to compare notes from different books read on the same subject
-
-<!-- ## Feature Demo -->
 
 And much more!
 
@@ -112,6 +109,10 @@ uv venv
 uv sync
 ```
 
+#### Debugging
+
+**With Claude Desktop**
+
 ```json
 {
     "mcpServers": {
@@ -127,6 +128,12 @@ uv sync
         }
     }
 }
+```
+
+**With inspector**
+
+```bash
+npx @modelcontextprotocol/inspector uvx apple-books-mcp
 ```
 
 ### Opening Issues
