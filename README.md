@@ -14,6 +14,8 @@ Model Context Protocol (MCP) server for Apple Books.
 * Ask Claude to recommend similar books based on your reading history
 * Ask Claude to compare notes from different books read on the same subject
 
+https://github.com/user-attachments/assets/77a5a29b-bfd7-4275-a4af-8d6c51a4527e
+
 And much more!
 
 ## Available Tools
