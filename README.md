@@ -1,3 +1,5 @@
+[![MseeP.ai Security Assessment Badge](https://mseep.net/pr/vgnshiyer-apple-books-mcp-badge.png)](https://mseep.ai/app/vgnshiyer-apple-books-mcp)
+
 # Apple Books MCP
 
 Model Context Protocol (MCP) server for Apple Books.
