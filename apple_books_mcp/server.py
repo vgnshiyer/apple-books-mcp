@@ -77,8 +77,7 @@ def get_book_annotations(book_id: str) -> TextContent:
     """
     book = apple_books.get_book_by_id(book_id)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n\
-        Chapter: {annotation.chapter} - Location: {annotation.location} | Modified: {annotation.modification_date}\n"
+        f"{annotation.selected_text}\n"
         for annotation in book.annotations
     ])
     return TextContent(
@@ -127,8 +126,7 @@ def get_highlights_by_color(color: str) -> TextContent:
     """
     annotations = apple_books.get_annotations_by_color(color)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n\
-        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{annotation.selected_text} from {annotation.book.title}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -147,8 +145,7 @@ def search_highlighted_text(text: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_highlighted_text(text)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n\
-        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{annotation.selected_text} from {annotation.book.title}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -167,8 +164,7 @@ def search_notes(note: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_note(note)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n\
-        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{annotation.selected_text}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -187,8 +183,7 @@ def full_text_search(text: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_text(text)
     annotations_str = "\n".join([
-        f"{str(annotation)}\n\
-        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{annotation.selected_text} from {annotation.book.title}, Chapter: {annotation.chapter}\n"
         for annotation in annotations
     ])
     return TextContent(
@@ -204,8 +199,7 @@ def recent_annotations() -> TextContent:
     """
     annotations = apple_books.list_annotations(limit=10, order_by="-creation_date")
     annotations_str = "\n".join([
-        f"{str(annotation)}\n\
-        Book: {annotation.book.title if annotation.book else 'Unknown'} - Chapter: {annotation.chapter} - Location: {annotation.location}\n"
+        f"{annotation.selected_text} from {annotation.book.title}, Chapter: {annotation.chapter}\n"
         for annotation in annotations
     ])
     return TextContent(
