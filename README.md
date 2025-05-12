@@ -71,7 +71,7 @@ python -m apple_books_mcp
     "mcpServers": {
         "apple-books-mcp": {
             "command": "uvx",
-            "args": [ "apple-books-mcp" ]
+            "args": [ "apple-books-mcp@latest" ]
         }
     }
 }
