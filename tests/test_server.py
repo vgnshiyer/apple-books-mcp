@@ -144,7 +144,18 @@ def test_full_text_search(mock_apple_books):
 def test_recent_annotations(mock_apple_books):
     result = recent_annotations()
     assert "Test text" in result.text
-    mock_apple_books.list_annotations.assert_called_once()
+    mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
+
+
+def test_recent_annotations_handles_missing_book(mock_apple_books):
+    orphaned_annotation = MockAnnotation()
+    orphaned_annotation.book = None
+    mock_apple_books.list_annotations.return_value = [orphaned_annotation]
+
+    result = recent_annotations()
+
+    assert "Unknown Book" in result.text
+    mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
 
 
 def test_describe_annotation(mock_apple_books):
