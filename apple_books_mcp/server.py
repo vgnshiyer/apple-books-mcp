@@ -12,6 +12,22 @@ mcp = FastMCP("apple-books")
 apple_books = PyAppleBooks()
 
 
+def _get_book_title(annotation) -> str:
+    book = getattr(annotation, "book", None)
+    return getattr(book, "title", None) or "Unknown Book"
+
+
+def _format_annotation_with_book(annotation, include_chapter: bool = False) -> str:
+    annotation_text = getattr(annotation, "selected_text", None)
+    book_title = _get_book_title(annotation)
+
+    if include_chapter:
+        chapter = getattr(annotation, "chapter", None)
+        return f"{annotation_text} from {book_title}, Chapter: {chapter}\n"
+
+    return f"{annotation_text} from {book_title}\n"
+
+
 # -- Collections Tools --
 @mcp.tool()
 def list_all_collections() -> TextContent:
@@ -126,7 +142,7 @@ def get_highlights_by_color(color: str) -> TextContent:
     """
     annotations = apple_books.get_annotations_by_color(color)
     annotations_str = "\n".join([
-        f"{annotation.selected_text} from {annotation.book.title}\n"
+        _format_annotation_with_book(annotation)
         for annotation in annotations
     ])
     return TextContent(
@@ -145,7 +161,7 @@ def search_highlighted_text(text: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_highlighted_text(text)
     annotations_str = "\n".join([
-        f"{annotation.selected_text} from {annotation.book.title}\n"
+        _format_annotation_with_book(annotation)
         for annotation in annotations
     ])
     return TextContent(
@@ -183,7 +199,7 @@ def full_text_search(text: str) -> TextContent:
     """
     annotations = apple_books.search_annotation_by_text(text)
     annotations_str = "\n".join([
-        f"{annotation.selected_text} from {annotation.book.title}, Chapter: {annotation.chapter}\n"
+        _format_annotation_with_book(annotation, include_chapter=True)
         for annotation in annotations
     ])
     return TextContent(
@@ -199,7 +215,7 @@ def recent_annotations() -> TextContent:
     """
     annotations = apple_books.list_annotations(limit=10, order_by="-creation_date")
     annotations_str = "\n".join([
-        f"{annotation.selected_text} from {annotation.book.title}, Chapter: {annotation.chapter}\n"
+        _format_annotation_with_book(annotation, include_chapter=True)
         for annotation in annotations
     ])
     return TextContent(
