@@ -12,6 +12,13 @@ mcp = FastMCP("apple-books")
 apple_books = PyAppleBooks()
 
 
+def _format_book_with_progress(book) -> str:
+    author = getattr(book, "author", None) or "Unknown Author"
+    title = getattr(book, "title", None) or "Unknown Title"
+    progress = book.format_progress_summary()
+    return f"{title} by {author}\n{progress}"
+
+
 def _get_book_title(annotation) -> str:
     book = getattr(annotation, "book", None)
     return getattr(book, "title", None) or "Unknown Book"
@@ -114,6 +121,63 @@ def describe_book(book_id: str) -> TextContent:
     return TextContent(
         type="text",
         text=f"{json.dumps(book.__dict__, default=str)}"
+    )
+
+
+# -- Reading Status Tools --
+@mcp.tool()
+def get_books_in_progress() -> TextContent:
+    """Get all books currently being read (progress > 0% and < 100%)."""
+    books = apple_books.get_books_in_progress()
+    books_str = "\n".join([
+        _format_book_with_progress(book)
+        for book in books
+    ])
+    return TextContent(
+        type="text",
+        text=f"Books in progress:\n{books_str}"
+    )
+
+
+@mcp.tool()
+def get_finished_books() -> TextContent:
+    """Get all books that have been finished."""
+    books = apple_books.get_finished_books()
+    books_str = "\n".join([
+        _format_book_with_progress(book)
+        for book in books
+    ])
+    return TextContent(
+        type="text",
+        text=f"Finished books:\n{books_str}"
+    )
+
+
+@mcp.tool()
+def get_unstarted_books() -> TextContent:
+    """Get all books that haven't been started yet (0% progress)."""
+    books = apple_books.get_unstarted_books()
+    books_str = "\n".join([
+        _format_book_with_progress(book)
+        for book in books
+    ])
+    return TextContent(
+        type="text",
+        text=f"Unstarted books:\n{books_str}"
+    )
+
+
+@mcp.tool()
+def get_recently_read_books() -> TextContent:
+    """Get 10 most recently opened books, ordered by last opened date."""
+    books = apple_books.get_recently_read_books()
+    books_str = "\n".join([
+        _format_book_with_progress(book)
+        for book in books
+    ])
+    return TextContent(
+        type="text",
+        text=f"Recently read books:\n{books_str}"
     )
 
 
