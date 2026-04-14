@@ -124,6 +124,38 @@ def describe_book(book_id: str) -> TextContent:
     )
 
 
+@mcp.tool()
+def search_books_by_title(title: str) -> TextContent:
+    """
+    Search for books by title.
+
+    Args:
+        title: The title to search for.
+    """
+    books = apple_books.get_book_by_title(title)
+    books_str = "\n".join([f"{str(book)}\n" for book in books])
+    return TextContent(
+        type="text",
+        text=f"Books:\n{books_str}"
+    )
+
+
+@mcp.tool()
+def search_collections_by_title(title: str) -> TextContent:
+    """
+    Search for collections by title.
+
+    Args:
+        title: The title to search for.
+    """
+    collections = apple_books.get_collection_by_title(title)
+    collections_str = "\n".join([f"{str(collection)}\n" for collection in collections])
+    return TextContent(
+        type="text",
+        text=f"Collections:\n{collections_str}"
+    )
+
+
 # -- Reading Status Tools --
 @mcp.tool()
 def get_books_in_progress() -> TextContent:

@@ -3,6 +3,7 @@ from unittest.mock import patch
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
     list_all_books, get_book_annotations, describe_book,
+    search_books_by_title, search_collections_by_title,
     get_books_in_progress, get_finished_books, get_unstarted_books,
     get_recently_read_books,
     list_all_annotations, get_highlights_by_color, search_highlighted_text,
@@ -81,6 +82,8 @@ def mock_apple_books():
         mock.search_annotation_by_note.return_value = [anno]
         mock.search_annotation_by_text.return_value = [anno]
         mock.get_annotation_by_id.return_value = anno
+        mock.get_book_by_title.return_value = [book]
+        mock.get_collection_by_title.return_value = [MockCollection()]
         mock.get_books_in_progress.return_value = [book]
         mock.get_finished_books.return_value = [book]
         mock.get_unstarted_books.return_value = [book]
@@ -170,6 +173,18 @@ def test_recent_annotations_handles_missing_book(mock_apple_books):
 
     assert "Unknown Book" in result.text
     mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
+
+
+def test_search_books_by_title(mock_apple_books):
+    result = search_books_by_title("Book")
+    assert "Book 1" in result.text
+    mock_apple_books.get_book_by_title.assert_called_once_with("Book")
+
+
+def test_search_collections_by_title(mock_apple_books):
+    result = search_collections_by_title("Collection")
+    assert "Collection 1" in result.text
+    mock_apple_books.get_collection_by_title.assert_called_once_with("Collection")
 
 
 def test_get_books_in_progress(mock_apple_books):
