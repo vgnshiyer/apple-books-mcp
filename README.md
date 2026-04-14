@@ -11,6 +11,8 @@ Model Context Protocol (MCP) server for Apple Books.
 ## At a glance
 
 * Ask Claude to summarize your recent highlights
+* Ask Claude what books you're currently reading and your progress
+* Ask Claude to find a book by title
 * Ask Claude to organize books in your library by genre
 * Ask Claude to recommend similar books based on your reading history
 * Ask Claude to compare notes from different books read on the same subject
@@ -21,21 +23,44 @@ And much more!
 
 ## Available Tools
 
+### Collections
+
 | Tool | Description | Parameters |
-|----------|-------------|------------|
-| list_collections() | List all collections | None |
-| get_collection_books(collection_id) | Get all books in a collection | collection_id: str |
-| describe_collection(collection_id) | Get details of a collection | collection_id: str |
-| list_all_books() | List all books | None |
-| get_book_annotations(book_id) | Get all annotations for a book | book_id: str |
-| describe_book(book_id) | Get details of a particular book | book_id: str |
-| list_all_annotations() | List all annotations | None |
-| get_highlights_by_color(color) | Get all highlights by color | color: str |
-| search_highlighted_text(text) | Search for highlights by highlighted text | text: str |
-| search_notes(note) | Search for notes | note: str |
-| full_text_search(text) | Search for annotations containing the given text | text: str |
-| recent_annotations() | Get 10 most recent annotations | None |
-| describe_annotation(annotation_id) | Get details of an annotation | annotation_id: str |
+|------|-------------|------------|
+| list_all_collections | List all collections | limit?: int |
+| get_collection_books | Get all books in a collection | collection_id: str |
+| describe_collection | Get details of a collection | collection_id: str |
+| search_collections_by_title | Search for collections by title | title: str |
+
+### Books
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| list_all_books | List all books | limit?: int |
+| describe_book | Get details of a particular book | book_id: str |
+| get_book_annotations | Get all annotations for a book | book_id: str |
+| search_books_by_title | Search for books by title | title: str |
+
+### Reading Status
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| get_books_in_progress | Get books currently being read | limit?: int |
+| get_finished_books | Get books that have been finished | limit?: int |
+| get_unstarted_books | Get books not yet started | limit?: int |
+| get_recently_read_books | Get most recently opened books | limit?: int (default: 10) |
+
+### Annotations
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| list_all_annotations | List all annotations | limit?: int |
+| recent_annotations | Get most recent annotations | limit?: int (default: 10) |
+| describe_annotation | Get details of an annotation | annotation_id: str |
+| get_highlights_by_color | Get all highlights by color | color: str, limit?: int |
+| search_highlighted_text | Search highlights by text | text: str, limit?: int |
+| search_notes | Search annotations by note | note: str, limit?: int |
+| full_text_search | Search annotations by any text | text: str, limit?: int |
 
 ## Installation
 

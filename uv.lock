@@ -43,7 +43,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1.8" },
     { name = "fastmcp", specifier = ">=0.4.1" },
-    { name = "py-apple-books", specifier = ">=1.3.0" },
+    { name = "py-apple-books", specifier = ">=1.4.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -220,11 +220,11 @@ wheels = [
 
 [[package]]
 name = "py-apple-books"
-version = "1.3.0"
+version = "1.4.0"
 source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/e9/eb/ec171631b30eddbd0577adec088e92b992fb94cd8911b48c5ed9ec57f79d/py_apple_books-1.3.0.tar.gz", hash = "sha256:ec2d009b755e8dddc21882f277d13e7f61cae98c30ffe9b2b3c56dbd48a1d05e", size = 13325 }
+sdist = { url = "https://files.pythonhosted.org/packages/ec/06/23c049b292b67dbdf0f4dd7e7476431d44d3e240076327dbc2a4023aa771/py_apple_books-1.4.0.tar.gz", hash = "sha256:5c20891834e3d3c6af71625b9ad98e20a90857f636eabe2790d0613d9e21968c", size = 13970 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/c7/05/3ca0aa94114432e90c2fd333ca1914a3a3eeee442bb701a4568b9d44813b/py_apple_books-1.3.0-py3-none-any.whl", hash = "sha256:528d00ebcf668078c61a827145804dd8b219c56d1d3a6b636ad61f9d86fe9705", size = 15196 },
+    { url = "https://files.pythonhosted.org/packages/b6/95/a0d06336126f5e68a6d829ce47f51f49928d550598f99ff8d566096ed8bb/py_apple_books-1.4.0-py3-none-any.whl", hash = "sha256:d1e99b5cf9d6b8d3c020e7143b59f5ddab53381a0d45ae49231da6c7c896cf34", size = 15803 },
 ]
 
 [[package]]

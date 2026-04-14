@@ -3,6 +3,9 @@ from unittest.mock import patch
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
     list_all_books, get_book_annotations, describe_book,
+    search_books_by_title, search_collections_by_title,
+    get_books_in_progress, get_finished_books, get_unstarted_books,
+    get_recently_read_books,
     list_all_annotations, get_highlights_by_color, search_highlighted_text,
     search_notes, full_text_search, recent_annotations,
     describe_annotation
@@ -13,10 +16,18 @@ class MockBook:
     def __init__(self):
         self.id = "book1"
         self.title = "Book 1"
+        self.author = "Author 1"
         self.annotations = []
+        self.reading_progress = 45.0
+        self.is_finished = False
+        self.last_opened_date = None
+        self.duration = 3600
 
     def __str__(self):
         return "Book 1"
+
+    def format_progress_summary(self):
+        return "Progress: In Progress (45.0%) | Time Spent: 1.0h"
 
     @property
     def __dict__(self):
@@ -71,6 +82,12 @@ def mock_apple_books():
         mock.search_annotation_by_note.return_value = [anno]
         mock.search_annotation_by_text.return_value = [anno]
         mock.get_annotation_by_id.return_value = anno
+        mock.get_book_by_title.return_value = [book]
+        mock.get_collection_by_title.return_value = [MockCollection()]
+        mock.get_books_in_progress.return_value = [book]
+        mock.get_finished_books.return_value = [book]
+        mock.get_unstarted_books.return_value = [book]
+        mock.get_recently_read_books.return_value = [book]
 
         yield mock
 
@@ -78,7 +95,7 @@ def mock_apple_books():
 def test_list_all_collections(mock_apple_books):
     result = list_all_collections()
     assert "Collection 1" in result.text
-    mock_apple_books.list_collections.assert_called_once()
+    mock_apple_books.list_collections.assert_called_once_with(limit=None)
 
 
 def test_get_collection_books(mock_apple_books):
@@ -96,7 +113,7 @@ def test_describe_collection(mock_apple_books):
 def test_list_all_books(mock_apple_books):
     result = list_all_books()
     assert "Book 1" in result.text
-    mock_apple_books.list_books.assert_called_once()
+    mock_apple_books.list_books.assert_called_once_with(limit=None)
 
 
 def test_get_book_annotations(mock_apple_books):
@@ -114,31 +131,31 @@ def test_describe_book(mock_apple_books):
 def test_list_all_annotations(mock_apple_books):
     result = list_all_annotations()
     assert "Test text" in result.text
-    mock_apple_books.list_annotations.assert_called_once()
+    mock_apple_books.list_annotations.assert_called_once_with(limit=None)
 
 
 def test_get_highlights_by_color(mock_apple_books):
     result = get_highlights_by_color("yellow")
     assert "Test text" in result.text
-    mock_apple_books.get_annotations_by_color.assert_called_once_with("yellow")
+    mock_apple_books.get_annotations_by_color.assert_called_once_with("yellow", limit=None)
 
 
 def test_search_highlighted_text(mock_apple_books):
     result = search_highlighted_text("test")
     assert "Test text" in result.text
-    mock_apple_books.search_annotation_by_highlighted_text.assert_called_once_with("test")
+    mock_apple_books.search_annotation_by_highlighted_text.assert_called_once_with("test", limit=None)
 
 
 def test_search_notes(mock_apple_books):
     result = search_notes("note")
     assert "Test text" in result.text
-    mock_apple_books.search_annotation_by_note.assert_called_once_with("note")
+    mock_apple_books.search_annotation_by_note.assert_called_once_with("note", limit=None)
 
 
 def test_full_text_search(mock_apple_books):
     result = full_text_search("test")
     assert "Test text" in result.text
-    mock_apple_books.search_annotation_by_text.assert_called_once_with("test")
+    mock_apple_books.search_annotation_by_text.assert_called_once_with("test", limit=None)
 
 
 def test_recent_annotations(mock_apple_books):
@@ -156,6 +173,55 @@ def test_recent_annotations_handles_missing_book(mock_apple_books):
 
     assert "Unknown Book" in result.text
     mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
+
+
+def test_search_books_by_title(mock_apple_books):
+    result = search_books_by_title("Book")
+    assert "Book 1" in result.text
+    mock_apple_books.get_book_by_title.assert_called_once_with("Book")
+
+
+def test_search_collections_by_title(mock_apple_books):
+    result = search_collections_by_title("Collection")
+    assert "Collection 1" in result.text
+    mock_apple_books.get_collection_by_title.assert_called_once_with("Collection")
+
+
+def test_get_books_in_progress(mock_apple_books):
+    result = get_books_in_progress()
+    assert "Book 1" in result.text
+    assert "In Progress" in result.text
+    mock_apple_books.get_books_in_progress.assert_called_once_with(limit=None)
+
+
+def test_get_finished_books(mock_apple_books):
+    result = get_finished_books()
+    assert "Book 1" in result.text
+    assert "Author 1" in result.text
+    mock_apple_books.get_finished_books.assert_called_once_with(limit=None)
+
+
+def test_get_unstarted_books(mock_apple_books):
+    result = get_unstarted_books()
+    assert "Book 1" in result.text
+    mock_apple_books.get_unstarted_books.assert_called_once_with(limit=None)
+
+
+def test_get_recently_read_books(mock_apple_books):
+    result = get_recently_read_books()
+    assert "Book 1" in result.text
+    mock_apple_books.get_recently_read_books.assert_called_once_with(limit=10)
+
+
+def test_limit_parameter(mock_apple_books):
+    list_all_books(limit=5)
+    mock_apple_books.list_books.assert_called_once_with(limit=5)
+
+    recent_annotations(limit=3)
+    mock_apple_books.list_annotations.assert_called_with(limit=3, order_by="-creation_date")
+
+    get_books_in_progress(limit=2)
+    mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
 
 
 def test_describe_annotation(mock_apple_books):
