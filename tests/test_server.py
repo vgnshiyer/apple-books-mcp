@@ -8,7 +8,8 @@ from apple_books_mcp.server import (
     get_recently_read_books,
     list_all_annotations, get_highlights_by_color, search_highlighted_text,
     search_notes, full_text_search, recent_annotations,
-    describe_annotation
+    describe_annotation,
+    get_library_stats
 )
 
 
@@ -228,3 +229,13 @@ def test_describe_annotation(mock_apple_books):
     result = describe_annotation("anno1")
     assert "anno1" in result.text
     mock_apple_books.get_annotation_by_id.assert_called_once_with("anno1")
+
+
+def test_get_library_stats(mock_apple_books):
+    result = get_library_stats()
+    assert "Total books: 1" in result.text
+    assert "Total annotations: 1" in result.text
+    assert "Most annotated books:" in result.text
+    assert "Book 1" in result.text
+    mock_apple_books.list_books.assert_called_once()
+    mock_apple_books.list_annotations.assert_called_once()
