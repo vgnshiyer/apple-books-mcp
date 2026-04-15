@@ -6,7 +6,7 @@ try:
 except Exception:
     from .server import serve
 
-__version__ = "0.2.0"
+__version__ = "0.3.0"
 
 
 @click.command()

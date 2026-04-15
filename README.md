@@ -61,6 +61,13 @@ And much more!
 | search_highlighted_text | Search highlights by text | text: str, limit?: int |
 | search_notes | Search annotations by note | note: str, limit?: int |
 | full_text_search | Search annotations by any text | text: str, limit?: int |
+| get_annotations_by_date_range | Get annotations within a date range | after?: YYYY-MM-DD, before?: YYYY-MM-DD, limit?: int |
+
+### Library Stats
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| get_library_stats | Get library summary with reading stats | None |
 
 ## Installation
 

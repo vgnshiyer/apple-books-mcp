@@ -1,5 +1,6 @@
 import logging
 import json
+from datetime import datetime
 from mcp.types import (
     TextContent
 )
@@ -374,6 +375,74 @@ def describe_annotation(annotation_id: str) -> TextContent:
     return TextContent(
         type="text",
         text=f"{json.dumps(annotation.__dict__, default=str)}"
+    )
+
+
+@mcp.tool()
+def get_annotations_by_date_range(after: str = None, before: str = None, limit: int = None) -> TextContent:
+    """
+    Get annotations created within a date range.
+
+    Args:
+        after: Only include annotations created after this date (YYYY-MM-DD).
+        before: Only include annotations created before this date (YYYY-MM-DD).
+        limit: Maximum number of annotations to return.
+    """
+    after_dt = datetime.strptime(after, "%Y-%m-%d") if after else None
+    before_dt = datetime.strptime(before, "%Y-%m-%d") if before else None
+
+    annotations = apple_books.get_annotations_by_date_range(
+        after=after_dt, before=before_dt, limit=limit
+    )
+    annotations_str = "\n".join([
+        _format_annotation_with_book(annotation, include_chapter=True)
+        for annotation in annotations
+    ])
+    return TextContent(
+        type="text",
+        text=f"Annotations:\n{annotations_str}"
+    )
+
+
+# -- Library Stats Tools --
+@mcp.tool()
+def get_library_stats() -> TextContent:
+    """Get a summary of your Apple Books library with reading stats."""
+    books = list(apple_books.list_books())
+    annotations = list(apple_books.list_annotations())
+
+    total_books = len(books)
+    finished = sum(1 for b in books if getattr(b, "is_finished", False))
+    in_progress = sum(
+        1 for b in books
+        if (getattr(b, "reading_progress", 0) or 0) > 0
+        and not getattr(b, "is_finished", False)
+    )
+    unstarted = total_books - finished - in_progress
+
+    total_annotations = len(annotations)
+
+    # Count annotations per book
+    anno_counts = {}
+    for anno in annotations:
+        title = _get_book_title(anno)
+        anno_counts[title] = anno_counts.get(title, 0) + 1
+
+    top_annotated = sorted(anno_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    top_str = "\n".join([f"  {title}: {count}" for title, count in top_annotated])
+
+    stats = (
+        f"Total books: {total_books}\n"
+        f"Finished: {finished}\n"
+        f"In progress: {in_progress}\n"
+        f"Unstarted: {unstarted}\n"
+        f"Total annotations: {total_annotations}\n"
+        f"Most annotated books:\n{top_str}"
+    )
+
+    return TextContent(
+        type="text",
+        text=stats
     )
 
 
