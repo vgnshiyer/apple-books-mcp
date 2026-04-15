@@ -1,0 +1,21 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.vgnshiyer/apple-books-mcp",
+  "title": "Apple Books",
+  "description": "Access your Apple Books library, annotations, reading progress, and highlights through Claude",
+  "repository": {
+    "url": "https://github.com/vgnshiyer/apple-books-mcp",
+    "source": "github"
+  },
+  "version": "0.3.0",
+  "packages": [
+    {
+      "registryType": "pypi",
+      "identifier": "apple-books-mcp",
+      "version": "0.3.0",
+      "transport": {
+        "type": "stdio"
+      }
+    }
+  ]
+}
