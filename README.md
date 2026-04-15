@@ -94,6 +94,12 @@ After installing, you can run the server using:
 python -m apple_books_mcp
 ```
 
+### Using Docker
+
+```bash
+docker run -v ~/Library/Containers/com.apple.iBooksX/Data/Documents:/root/Library/Containers/com.apple.iBooksX/Data/Documents:ro ghcr.io/vgnshiyer/apple-books-mcp:latest
+```
+
 ## Configuration
 
 ### Claude Desktop Setup
@@ -124,9 +130,25 @@ python -m apple_books_mcp
 }
 ```
 
+#### Using Docker
+
+```json
+{
+    "mcpServers": {
+        "apple-books-mcp": {
+            "command": "docker",
+            "args": [
+                "run", "-i", "--rm",
+                "-v", "~/Library/Containers/com.apple.iBooksX/Data/Documents:/root/Library/Containers/com.apple.iBooksX/Data/Documents:ro",
+                "ghcr.io/vgnshiyer/apple-books-mcp:latest"
+            ]
+        }
+    }
+}
+```
+
 ## Upcoming Features
 
-- [ ] add docker support
 - [ ] add resources support
 - [ ] edit collections support
 - [ ] edit highlights support
