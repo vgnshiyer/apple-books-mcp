@@ -1,5 +1,7 @@
 # Apple Books MCP
 
+<!-- mcp-name: io.github.vgnshiyer/apple-books-mcp -->
+
 Model Context Protocol (MCP) server for Apple Books.
 
 ![](https://badge.mcpx.dev?type=server 'MCP Server')
