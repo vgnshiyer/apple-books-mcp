@@ -9,6 +9,7 @@ from apple_books_mcp.server import (
     list_all_annotations, get_highlights_by_color, search_highlighted_text,
     search_notes, full_text_search, recent_annotations,
     describe_annotation,
+    get_annotations_by_date_range,
     get_library_stats
 )
 
@@ -89,6 +90,7 @@ def mock_apple_books():
         mock.get_finished_books.return_value = [book]
         mock.get_unstarted_books.return_value = [book]
         mock.get_recently_read_books.return_value = [book]
+        mock.get_annotations_by_date_range.return_value = [anno]
 
         yield mock
 
@@ -223,6 +225,24 @@ def test_limit_parameter(mock_apple_books):
 
     get_books_in_progress(limit=2)
     mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
+
+
+def test_get_annotations_by_date_range(mock_apple_books):
+    from datetime import datetime
+    result = get_annotations_by_date_range(after="2025-01-01", before="2025-12-31")
+    assert "Test text" in result.text
+    mock_apple_books.get_annotations_by_date_range.assert_called_once_with(
+        after=datetime(2025, 1, 1), before=datetime(2025, 12, 31), limit=None
+    )
+
+
+def test_get_annotations_by_date_range_after_only(mock_apple_books):
+    from datetime import datetime
+    result = get_annotations_by_date_range(after="2025-06-01")
+    assert "Test text" in result.text
+    mock_apple_books.get_annotations_by_date_range.assert_called_once_with(
+        after=datetime(2025, 6, 1), before=None, limit=None
+    )
 
 
 def test_describe_annotation(mock_apple_books):

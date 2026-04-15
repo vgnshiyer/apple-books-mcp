@@ -1,5 +1,6 @@
 import logging
 import json
+from datetime import datetime
 from mcp.types import (
     TextContent
 )
@@ -374,6 +375,32 @@ def describe_annotation(annotation_id: str) -> TextContent:
     return TextContent(
         type="text",
         text=f"{json.dumps(annotation.__dict__, default=str)}"
+    )
+
+
+@mcp.tool()
+def get_annotations_by_date_range(after: str = None, before: str = None, limit: int = None) -> TextContent:
+    """
+    Get annotations created within a date range.
+
+    Args:
+        after: Only include annotations created after this date (YYYY-MM-DD).
+        before: Only include annotations created before this date (YYYY-MM-DD).
+        limit: Maximum number of annotations to return.
+    """
+    after_dt = datetime.strptime(after, "%Y-%m-%d") if after else None
+    before_dt = datetime.strptime(before, "%Y-%m-%d") if before else None
+
+    annotations = apple_books.get_annotations_by_date_range(
+        after=after_dt, before=before_dt, limit=limit
+    )
+    annotations_str = "\n".join([
+        _format_annotation_with_book(annotation, include_chapter=True)
+        for annotation in annotations
+    ])
+    return TextContent(
+        type="text",
+        text=f"Annotations:\n{annotations_str}"
     )
 
 
