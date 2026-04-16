@@ -3,7 +3,7 @@ from unittest.mock import patch
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
     list_all_books, get_book_annotations, describe_book,
-    search_books_by_title, search_collections_by_title,
+    search_books_by_title, search_collections_by_title, get_books_by_genre,
     get_books_in_progress, get_finished_books, get_unstarted_books,
     get_recently_read_books,
     list_all_annotations, get_highlights_by_color, search_highlighted_text,
@@ -24,6 +24,7 @@ class MockBook:
         self.is_finished = False
         self.last_opened_date = None
         self.duration = 3600
+        self.genre = "Romance"
 
     def __str__(self):
         return "Book 1"
@@ -91,6 +92,7 @@ def mock_apple_books():
         mock.get_unstarted_books.return_value = [book]
         mock.get_recently_read_books.return_value = [book]
         mock.get_annotations_by_date_range.return_value = [anno]
+        mock.get_books_by_genre.return_value = [book]
 
         yield mock
 
@@ -182,6 +184,13 @@ def test_search_books_by_title(mock_apple_books):
     result = search_books_by_title("Book")
     assert "Book 1" in result.text
     mock_apple_books.get_book_by_title.assert_called_once_with("Book")
+
+
+def test_get_books_by_genre(mock_apple_books):
+    result = get_books_by_genre("Romance")
+    assert "Book 1" in result.text
+    assert "Romance" in result.text
+    mock_apple_books.get_books_by_genre.assert_called_once_with("Romance", limit=None)
 
 
 def test_search_collections_by_title(mock_apple_books):
