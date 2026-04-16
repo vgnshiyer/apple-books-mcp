@@ -152,6 +152,26 @@ def search_books_by_title(title: str) -> TextContent:
 
 
 @mcp.tool()
+def get_books_by_genre(genre: str, limit: int = None) -> TextContent:
+    """
+    Get books whose genre matches the given string (substring match).
+
+    Args:
+        genre: The genre to search for (e.g. "Romance", "Philosophy").
+        limit: Maximum number of books to return.
+    """
+    books = apple_books.get_books_by_genre(genre, limit=limit)
+    books_str = "\n".join([
+        f"{getattr(book, 'title', 'Unknown')} by {getattr(book, 'author', 'Unknown')} ({getattr(book, 'genre', None)})"
+        for book in books
+    ])
+    return TextContent(
+        type="text",
+        text=f"Books:\n{books_str}"
+    )
+
+
+@mcp.tool()
 def search_collections_by_title(title: str) -> TextContent:
     """
     Search for collections by title.

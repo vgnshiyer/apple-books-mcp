@@ -42,6 +42,7 @@ And much more!
 | describe_book | Get details of a particular book | book_id: str |
 | get_book_annotations | Get all annotations for a book | book_id: str |
 | search_books_by_title | Search for books by title | title: str |
+| get_books_by_genre | Get books by genre (substring match) | genre: str, limit?: int |
 
 ### Reading Status
 
