@@ -267,6 +267,22 @@ def test_describe_annotation(mock_apple_books):
     mock_apple_books.get_annotation_by_id.assert_called_once_with("anno1")
 
 
+def test_prompts_registered():
+    """Verify all 5 prompts are exposed via MCP."""
+    import asyncio
+    from apple_books_mcp.server import mcp
+
+    prompts = asyncio.run(mcp.list_prompts())
+    names = {p.name for p in prompts}
+    assert names == {
+        "weekly_digest",
+        "explain_recent_highlight",
+        "what_am_i_reading",
+        "library_snapshot",
+        "revisit_book",
+    }
+
+
 def test_get_library_stats(mock_apple_books):
     result = get_library_stats()
     assert "Total books: 1" in result.text
