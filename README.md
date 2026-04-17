@@ -163,7 +163,6 @@ docker run -v ~/Library/Containers/com.apple.iBooksX/Data/Documents:/root/Librar
 ## Upcoming Features
 
 - [ ] book content access for non-DRM EPUBs
-- [ ] reading session detection (auto-cluster highlights into sessions)
 
 ## Contribution
 
