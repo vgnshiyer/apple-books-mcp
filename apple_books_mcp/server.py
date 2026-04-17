@@ -25,8 +25,24 @@ def _get_book_title(annotation) -> str:
     return getattr(book, "title", None) or "Unknown Book"
 
 
+def _annotation_body(annotation) -> str:
+    """Pick the most informative text for the annotation.
+
+    `representative_text` contains the surrounding sentence/paragraph; `selected_text`
+    is what the user specifically highlighted. They're often identical, but when they
+    differ the fuller context is usually more useful to the model — while the specific
+    highlight still carries signal about what the reader zeroed in on.
+    """
+    rep = (getattr(annotation, "representative_text", None) or "").strip()
+    sel = (getattr(annotation, "selected_text", None) or "").strip()
+
+    if rep and sel and rep != sel and len(rep) > len(sel) + 20:
+        return f"{rep} ↳ highlighted: \"{sel}\""
+    return rep or sel
+
+
 def _format_annotation_with_book(annotation, include_chapter: bool = False) -> str:
-    annotation_text = getattr(annotation, "selected_text", None)
+    annotation_text = _annotation_body(annotation)
     book_title = _get_book_title(annotation)
     created = getattr(annotation, "creation_date", None)
     timestamp = created.strftime("%Y-%m-%dT%H:%M:%S") if created else "unknown"

@@ -42,6 +42,7 @@ class MockAnnotation:
     def __init__(self):
         self.id = "anno1"
         self.selected_text = "Test text"
+        self.representative_text = "Test text"
 
         self.book = MockBook()
         self.chapter = "Chapter 1"
@@ -235,6 +236,18 @@ def test_limit_parameter(mock_apple_books):
 
     get_books_in_progress(limit=2)
     mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
+
+
+def test_annotation_uses_representative_text_when_richer(mock_apple_books):
+    """Representative text (fuller sentence) should surface when it extends the highlight."""
+    anno = MockAnnotation()
+    anno.selected_text = "minus one"
+    anno.representative_text = "A caret acts like a minus one in git revision syntax."
+    mock_apple_books.list_annotations.return_value = [anno]
+
+    result = recent_annotations()
+    assert "A caret acts like a minus one in git revision syntax" in result.text
+    assert 'highlighted: "minus one"' in result.text
 
 
 def test_annotation_output_includes_timestamp(mock_apple_books):
