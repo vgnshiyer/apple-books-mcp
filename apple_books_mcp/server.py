@@ -484,6 +484,55 @@ def get_library_stats() -> TextContent:
     )
 
 
+# -- Resources --
+@mcp.resource(
+    "apple-books://currently-reading",
+    name="Currently Reading",
+    description="The book you're actively reading right now — the most recently opened in-progress book, with its metadata and recent annotations. Attach this to any conversation to give Claude your current reading context.",
+    mime_type="text/plain",
+)
+def currently_reading_resource() -> str:
+    """The most recently opened in-progress book, with its annotations."""
+    books = list(apple_books.get_books_in_progress(limit=1, order_by="-last_opened_date"))
+    if not books:
+        return "No book currently in progress."
+
+    book = books[0]
+    author = getattr(book, "author", None) or "Unknown Author"
+    title = getattr(book, "title", None) or "Unknown Title"
+    description = getattr(book, "description", None) or ""
+    progress_summary = book.format_progress_summary()
+
+    header = [
+        f"Currently Reading: {title} by {author}",
+        progress_summary,
+    ]
+    if description:
+        header.append(f"\nAbout: {description}")
+
+    annotations = sorted(
+        getattr(book, "annotations", []) or [],
+        key=lambda a: getattr(a, "creation_date", None) or "",
+        reverse=True,
+    )
+    # Cap to most recent 50 to keep the attached context manageable
+    annotations = annotations[:50]
+
+    if not annotations:
+        return "\n".join(header) + "\n\nNo annotations in this book yet."
+
+    lines = header + [f"\nRecent annotations ({len(annotations)} shown):\n"]
+    for anno in annotations:
+        created = getattr(anno, "creation_date", None)
+        timestamp = created.strftime("%Y-%m-%dT%H:%M:%S") if created else "unknown"
+        chapter = getattr(anno, "chapter", None)
+        body = _annotation_body(anno)
+        chapter_tag = f" (Chapter: {chapter})" if chapter else ""
+        lines.append(f"[{timestamp}]{chapter_tag} {body}")
+
+    return "\n".join(lines)
+
+
 # -- Prompts --
 @mcp.prompt()
 def weekly_digest(days: int = 7) -> str:

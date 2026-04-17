@@ -280,6 +280,30 @@ def test_describe_annotation(mock_apple_books):
     mock_apple_books.get_annotation_by_id.assert_called_once_with("anno1")
 
 
+def test_currently_reading_resource_registered():
+    """The currently-reading resource is available for attachment."""
+    import asyncio
+    from apple_books_mcp.server import mcp
+
+    resources = asyncio.run(mcp.list_resources())
+    uris = {str(r.uri) for r in resources}
+    assert "apple-books://currently-reading" in uris
+
+
+def test_currently_reading_resource_content(mock_apple_books):
+    """Reading the resource returns the most recent in-progress book with its annotations."""
+    import asyncio
+    from apple_books_mcp.server import mcp
+
+    result = asyncio.run(mcp.read_resource("apple-books://currently-reading"))
+    content = result[0].content if hasattr(result[0], "content") else str(result[0])
+    assert "Currently Reading: Book 1 by Author 1" in content
+    assert "In Progress" in content
+    # Annotations should be included
+    assert "Test text" in content
+    mock_apple_books.get_books_in_progress.assert_called_with(limit=1, order_by="-last_opened_date")
+
+
 def test_prompts_registered():
     """Verify all 5 prompts are exposed via MCP."""
     import asyncio

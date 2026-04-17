@@ -73,6 +73,14 @@ And much more!
 |------|-------------|------------|
 | get_library_stats | Get library summary with reading stats | None |
 
+## Available Resources
+
+Attachable data objects accessible from Claude Desktop's resource picker.
+
+| Resource | URI | Description |
+|----------|-----|-------------|
+| Currently Reading | `apple-books://currently-reading` | The book you're reading right now — most recently opened in-progress book, with its metadata and recent annotations. Attach to any conversation to focus Claude on your current read. |
+
 ## Available Prompts
 
 One-click workflows, accessible from Claude Desktop's prompt picker.
