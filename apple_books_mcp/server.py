@@ -25,8 +25,24 @@ def _get_book_title(annotation) -> str:
     return getattr(book, "title", None) or "Unknown Book"
 
 
+def _annotation_body(annotation) -> str:
+    """Pick the most informative text for the annotation.
+
+    `representative_text` contains the surrounding sentence/paragraph; `selected_text`
+    is what the user specifically highlighted. They're often identical, but when they
+    differ the fuller context is usually more useful to the model — while the specific
+    highlight still carries signal about what the reader zeroed in on.
+    """
+    rep = (getattr(annotation, "representative_text", None) or "").strip()
+    sel = (getattr(annotation, "selected_text", None) or "").strip()
+
+    if rep and sel and rep != sel and len(rep) > len(sel) + 20:
+        return f"{rep} ↳ highlighted: \"{sel}\""
+    return rep or sel
+
+
 def _format_annotation_with_book(annotation, include_chapter: bool = False) -> str:
-    annotation_text = getattr(annotation, "selected_text", None)
+    annotation_text = _annotation_body(annotation)
     book_title = _get_book_title(annotation)
     created = getattr(annotation, "creation_date", None)
     timestamp = created.strftime("%Y-%m-%dT%H:%M:%S") if created else "unknown"
@@ -465,6 +481,74 @@ def get_library_stats() -> TextContent:
     return TextContent(
         type="text",
         text=stats
+    )
+
+
+# -- Prompts --
+@mcp.prompt()
+def weekly_digest(days: int = 7) -> str:
+    """Summarize what I've read and highlighted in the past week."""
+    return (
+        f"Give me a digest of my reading from the past {days} days.\n\n"
+        f"Call `get_annotations_by_date_range` with `after` set to {days} days ago. "
+        "Group highlights by book, then cluster within each book into reading sessions "
+        "(highlights within ~30 minutes of each other belong to the same session). "
+        "Identify recurring themes or ideas I seem to be circling. Call out anything "
+        "surprising or interesting. Keep it under 400 words."
+    )
+
+
+@mcp.prompt()
+def explain_recent_highlight() -> str:
+    """Take my most recent highlight and explain what it means."""
+    return (
+        "Call `recent_annotations` with `limit=1` to get my most recent highlight. "
+        "Then explain:\n\n"
+        "1. What the passage is saying, in plain language.\n"
+        "2. Why it likely caught my attention — what's interesting about it.\n"
+        "3. How it fits into the broader argument of the book (if you know the book).\n\n"
+        "Quote the passage first, then explain. Keep it tight."
+    )
+
+
+@mcp.prompt()
+def what_am_i_reading() -> str:
+    """Quick snapshot of books I'm currently in the middle of."""
+    return (
+        "Call `get_books_in_progress` to list what I'm actively reading. For each book, "
+        "give a one-line characterization (title, author, progress, when I last opened "
+        "it). Don't just restate the data — add a sentence about what each book is "
+        "generally about if you know it. End with: \"What would you like to focus on?\""
+    )
+
+
+@mcp.prompt()
+def library_snapshot() -> str:
+    """A reflection on my whole reading life — what I've read, what I'm reading, what's stuck."""
+    return (
+        "Call `get_library_stats` and `get_books_in_progress`. Synthesize a reflection "
+        "covering:\n\n"
+        "- The overall shape of my library (total, finished, in progress, untouched)\n"
+        "- What I'm actively engaged with right now\n"
+        "- Themes across my most-annotated books — what do I seem drawn to?\n"
+        "- One honest observation about my reading pattern (e.g., lots of unfinished "
+        "ambition, or strong completion rate on certain genres, etc.)\n\n"
+        "Under 300 words. Warm but honest."
+    )
+
+
+@mcp.prompt()
+def revisit_book(book_title: str) -> str:
+    """Revisit your notes and highlights from a specific book."""
+    return (
+        f"I want to revisit my notes on \"{book_title}\".\n\n"
+        f"1. Call `search_books_by_title` with \"{book_title}\" to find it.\n"
+        "2. Call `get_book_annotations` with the book's ID to pull every highlight.\n"
+        "3. Group related highlights together by theme or argument.\n"
+        "4. Surface the 2-3 most interesting threads — what was I fixated on in this book?\n"
+        "5. If I wrote any notes (not just highlights), call those out — they usually "
+        "contain my actual thinking.\n\n"
+        "Format as a short essay, not a list. Quote me back to myself."
     )
 
 

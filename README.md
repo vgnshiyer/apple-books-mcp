@@ -73,6 +73,18 @@ And much more!
 |------|-------------|------------|
 | get_library_stats | Get library summary with reading stats | None |
 
+## Available Prompts
+
+One-click workflows, accessible from Claude Desktop's prompt picker.
+
+| Prompt | Description | Arguments |
+|--------|-------------|-----------|
+| weekly_digest | Summarize what I've read and highlighted in the past week | days?: int (default: 7) |
+| explain_recent_highlight | Take my most recent highlight and explain what it means | None |
+| what_am_i_reading | Quick snapshot of books I'm currently in the middle of | None |
+| library_snapshot | A reflection on my whole reading life | None |
+| revisit_book | Revisit your notes and highlights from a specific book | book_title: str |
+
 ## Installation
 
 ### Using uv (recommended)
@@ -151,9 +163,7 @@ docker run -v ~/Library/Containers/com.apple.iBooksX/Data/Documents:/root/Librar
 
 ## Upcoming Features
 
-- [ ] add resources support
-- [ ] edit collections support
-- [ ] edit highlights support
+- [ ] book content access for non-DRM EPUBs
 
 ## Contribution
 

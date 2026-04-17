@@ -42,6 +42,7 @@ class MockAnnotation:
     def __init__(self):
         self.id = "anno1"
         self.selected_text = "Test text"
+        self.representative_text = "Test text"
 
         self.book = MockBook()
         self.chapter = "Chapter 1"
@@ -237,6 +238,18 @@ def test_limit_parameter(mock_apple_books):
     mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
 
 
+def test_annotation_uses_representative_text_when_richer(mock_apple_books):
+    """Representative text (fuller sentence) should surface when it extends the highlight."""
+    anno = MockAnnotation()
+    anno.selected_text = "minus one"
+    anno.representative_text = "A caret acts like a minus one in git revision syntax."
+    mock_apple_books.list_annotations.return_value = [anno]
+
+    result = recent_annotations()
+    assert "A caret acts like a minus one in git revision syntax" in result.text
+    assert 'highlighted: "minus one"' in result.text
+
+
 def test_annotation_output_includes_timestamp(mock_apple_books):
     """Timestamps are required for Claude to cluster annotations into sessions."""
     result = recent_annotations()
@@ -265,6 +278,22 @@ def test_describe_annotation(mock_apple_books):
     result = describe_annotation("anno1")
     assert "anno1" in result.text
     mock_apple_books.get_annotation_by_id.assert_called_once_with("anno1")
+
+
+def test_prompts_registered():
+    """Verify all 5 prompts are exposed via MCP."""
+    import asyncio
+    from apple_books_mcp.server import mcp
+
+    prompts = asyncio.run(mcp.list_prompts())
+    names = {p.name for p in prompts}
+    assert names == {
+        "weekly_digest",
+        "explain_recent_highlight",
+        "what_am_i_reading",
+        "library_snapshot",
+        "revisit_book",
+    }
 
 
 def test_get_library_stats(mock_apple_books):
