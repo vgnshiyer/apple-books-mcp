@@ -28,12 +28,14 @@ def _get_book_title(annotation) -> str:
 def _format_annotation_with_book(annotation, include_chapter: bool = False) -> str:
     annotation_text = getattr(annotation, "selected_text", None)
     book_title = _get_book_title(annotation)
+    created = getattr(annotation, "creation_date", None)
+    timestamp = created.strftime("%Y-%m-%dT%H:%M:%S") if created else "unknown"
 
     if include_chapter:
         chapter = getattr(annotation, "chapter", None)
-        return f"{annotation_text} from {book_title}, Chapter: {chapter}\n"
+        return f"[{timestamp}] {annotation_text} from {book_title}, Chapter: {chapter}\n"
 
-    return f"{annotation_text} from {book_title}\n"
+    return f"[{timestamp}] {annotation_text} from {book_title}\n"
 
 
 # -- Collections Tools --

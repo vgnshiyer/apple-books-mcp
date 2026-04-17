@@ -1,4 +1,5 @@
 import pytest
+from datetime import datetime
 from unittest.mock import patch
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
@@ -45,8 +46,8 @@ class MockAnnotation:
         self.book = MockBook()
         self.chapter = "Chapter 1"
         self.location = "Page 1"
-        self.creation_date = "2023-01-01"
-        self.modification_date = "2023-01-02"
+        self.creation_date = datetime(2026, 4, 16, 14, 23, 45)
+        self.modification_date = datetime(2026, 4, 16, 14, 24, 0)
 
     def __str__(self):
         return "Highlight: Test text"
@@ -234,6 +235,12 @@ def test_limit_parameter(mock_apple_books):
 
     get_books_in_progress(limit=2)
     mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
+
+
+def test_annotation_output_includes_timestamp(mock_apple_books):
+    """Timestamps are required for Claude to cluster annotations into sessions."""
+    result = recent_annotations()
+    assert "2026-04-16T14:23:45" in result.text
 
 
 def test_get_annotations_by_date_range(mock_apple_books):
