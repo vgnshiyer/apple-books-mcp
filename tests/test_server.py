@@ -3,13 +3,14 @@ from datetime import datetime
 from unittest.mock import patch
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
-    list_all_books, get_book_annotations, describe_book,
+    list_all_books, describe_book,
     search_books_by_title, search_collections_by_title, get_books_by_genre,
     get_books_in_progress, get_finished_books, get_unstarted_books,
     get_recently_read_books,
-    list_all_annotations, get_highlights_by_color, search_highlighted_text,
-    search_notes, full_text_search, recent_annotations,
-    describe_annotation,
+    list_all_annotations, list_annotations,
+    get_highlights_by_color,
+    search_notes, search_annotations, recent_annotations,
+    describe_annotation, get_annotation_context,
     get_annotations_by_date_range,
     get_library_stats
 )
@@ -38,6 +39,20 @@ class MockBook:
         return {"id": "book1", "title": "Book 1"}
 
 
+class MockLocation:
+    """Mimic py_apple_books.models.location.Location's surface for tests."""
+    def __init__(self, cfi: str = "", chapter_id: str = None, char_range=None):
+        self.cfi = cfi
+        self.chapter_id = chapter_id
+        self.char_range = char_range
+
+    def __bool__(self):
+        return bool(self.cfi)
+
+    def __str__(self):
+        return self.cfi
+
+
 class MockAnnotation:
     def __init__(self):
         self.id = "anno1"
@@ -46,7 +61,12 @@ class MockAnnotation:
 
         self.book = MockBook()
         self.chapter = "Chapter 1"
-        self.location = "Page 1"
+        # Location is now a value object in py-apple-books v1.8.0+; mock
+        # that shape so MCP tools that use ``annotation.location.chapter_id``
+        # behave correctly.
+        self.location = MockLocation(
+            cfi="epubcfi(/6/8[chap1]!/4/2/1:0)", chapter_id="chap1"
+        )
         self.creation_date = datetime(2026, 4, 16, 14, 23, 45)
         self.modification_date = datetime(2026, 4, 16, 14, 24, 0)
 
@@ -60,6 +80,9 @@ class MockAnnotation:
 
 class MockCollection:
     def __init__(self):
+        self.id = "col1"
+        self.title = "Collection 1"
+        self.details = ""
         self._books = [MockBook()]
 
     def __str__(self):
@@ -87,6 +110,9 @@ def mock_apple_books():
         mock.search_annotation_by_note.return_value = [anno]
         mock.search_annotation_by_text.return_value = [anno]
         mock.get_annotation_by_id.return_value = anno
+        mock.get_annotation_surrounding_text.return_value = (
+            "Some preceding text. Test text. Some following text."
+        )
         mock.get_book_by_title.return_value = [book]
         mock.get_collection_by_title.return_value = [MockCollection()]
         mock.get_books_in_progress.return_value = [book]
@@ -123,12 +149,6 @@ def test_list_all_books(mock_apple_books):
     mock_apple_books.list_books.assert_called_once_with(limit=None)
 
 
-def test_get_book_annotations(mock_apple_books):
-    result = get_book_annotations("book1")
-    assert "Test text" in result.text
-    mock_apple_books.get_book_by_id.assert_called_once_with("book1")
-
-
 def test_describe_book(mock_apple_books):
     result = describe_book("book1")
     assert "book1" in result.text
@@ -137,8 +157,41 @@ def test_describe_book(mock_apple_books):
 
 def test_list_all_annotations(mock_apple_books):
     result = list_all_annotations()
-    assert "Test text" in result.text
-    mock_apple_books.list_annotations.assert_called_once_with(limit=None)
+    # New in v0.7.0: lean grouped-by-book output — id + chapter,
+    # no selected_text body. Surrounding text is a follow-up call.
+    assert "[anno1]" in result.text
+    assert "Book 1" in result.text
+    # Ordering defaults to recent-first so heavily-deleted old books
+    # (orphan asset_ids) don't dominate the top of the listing.
+    mock_apple_books.list_annotations.assert_called_once_with(
+        limit=None, order_by="-creation_date"
+    )
+
+
+def test_list_annotations_by_book(mock_apple_books):
+    result = list_annotations("book1")
+    # Book-scoped listing: no book name per row (caller passed book_id),
+    # just the annotation id and chapter.
+    assert "[anno1]" in result.text
+    # The book name should NOT repeat in each row — that's the whole
+    # point of taking book_id as an argument.
+    assert "Book 1" not in result.text
+    mock_apple_books.get_book_by_id.assert_called_with("book1")
+
+
+def test_list_annotations_empty_for_book_with_none(mock_apple_books):
+    # Book exists but has no annotations — should return a friendly
+    # message instead of empty output.
+    book = mock_apple_books.get_book_by_id.return_value
+    book.annotations = []
+    result = list_annotations("book1")
+    assert "No annotations" in result.text
+
+
+def test_list_annotations_unknown_book(mock_apple_books):
+    mock_apple_books.get_book_by_id.side_effect = IndexError()
+    result = list_annotations("99999")
+    assert "No book found" in result.text
 
 
 def test_get_highlights_by_color(mock_apple_books):
@@ -147,20 +200,14 @@ def test_get_highlights_by_color(mock_apple_books):
     mock_apple_books.get_annotations_by_color.assert_called_once_with("yellow", limit=None)
 
 
-def test_search_highlighted_text(mock_apple_books):
-    result = search_highlighted_text("test")
-    assert "Test text" in result.text
-    mock_apple_books.search_annotation_by_highlighted_text.assert_called_once_with("test", limit=None)
-
-
 def test_search_notes(mock_apple_books):
     result = search_notes("note")
     assert "Test text" in result.text
     mock_apple_books.search_annotation_by_note.assert_called_once_with("note", limit=None)
 
 
-def test_full_text_search(mock_apple_books):
-    result = full_text_search("test")
+def test_search_annotations(mock_apple_books):
+    result = search_annotations("test")
     assert "Test text" in result.text
     mock_apple_books.search_annotation_by_text.assert_called_once_with("test", limit=None)
 
@@ -178,7 +225,10 @@ def test_recent_annotations_handles_missing_book(mock_apple_books):
 
     result = recent_annotations()
 
-    assert "Unknown Book" in result.text
+    # Orphaned annotations (asset_id no longer maps to a library book) get
+    # an explicit "no longer in library" suffix instead of silently
+    # disappearing into an "Unknown Book" bucket.
+    assert "no longer in library" in result.text
     mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
 
 
@@ -238,22 +288,29 @@ def test_limit_parameter(mock_apple_books):
     mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
 
 
-def test_annotation_uses_representative_text_when_richer(mock_apple_books):
-    """Representative text (fuller sentence) should surface when it extends the highlight."""
+def test_annotation_lean_row_prefers_selected_text(mock_apple_books):
+    """v0.7.0 list-style tools render lean rows: ``[id] selected — chapter``.
+    The fuller ``representative_text`` stays out of these — callers who want
+    context follow up with ``describe_annotation`` or
+    ``get_annotation_context``."""
     anno = MockAnnotation()
     anno.selected_text = "minus one"
     anno.representative_text = "A caret acts like a minus one in git revision syntax."
     mock_apple_books.list_annotations.return_value = [anno]
 
     result = recent_annotations()
-    assert "A caret acts like a minus one in git revision syntax" in result.text
-    assert 'highlighted: "minus one"' in result.text
+    # Lean output shows the highlight the user actually selected.
+    assert "minus one" in result.text
+    # Representative text is NOT shown inline — that's the whole point of
+    # the lean format.
+    assert "A caret acts like" not in result.text
 
 
-def test_annotation_output_includes_timestamp(mock_apple_books):
-    """Timestamps are required for Claude to cluster annotations into sessions."""
+def test_annotation_output_includes_date(mock_apple_books):
+    """The flat-with-timestamp format leads each row with YYYY-MM-DD so
+    Claude can cluster annotations into reading sessions."""
     result = recent_annotations()
-    assert "2026-04-16T14:23:45" in result.text
+    assert "2026-04-16" in result.text
 
 
 def test_get_annotations_by_date_range(mock_apple_books):
@@ -280,6 +337,36 @@ def test_describe_annotation(mock_apple_books):
     mock_apple_books.get_annotation_by_id.assert_called_once_with("anno1")
 
 
+def test_get_annotation_context_marks_highlight(mock_apple_books):
+    """The tool wraps the selected_text with guillemets inside the
+    returned window so Claude can see the exact anchor."""
+    result = get_annotation_context(1)
+    assert "«Test text»" in result.text
+    assert "Some preceding text" in result.text
+    assert "Some following text" in result.text
+    mock_apple_books.get_annotation_surrounding_text.assert_called_once_with(
+        1, chars_before=500, chars_after=500
+    )
+
+
+def test_get_annotation_context_empty_degrades(mock_apple_books):
+    """When the backend returns '' (no CFI hint, DRM, etc.) the tool
+    returns an explanatory message instead of an empty response."""
+    mock_apple_books.get_annotation_surrounding_text.return_value = ""
+    # Drop the location so the reason is the missing-chapter-hint path.
+    anno = mock_apple_books.get_annotation_by_id.return_value
+    anno.location = None
+    result = get_annotation_context(1)
+    assert "No surrounding context available" in result.text
+    assert "CFI" in result.text
+
+
+def test_get_annotation_context_unknown_id(mock_apple_books):
+    mock_apple_books.get_annotation_by_id.side_effect = IndexError()
+    result = get_annotation_context(99999)
+    assert "No annotation found with id 99999" in result.text
+
+
 def test_currently_reading_resource_registered():
     """The currently-reading resource is available for attachment."""
     import asyncio
@@ -291,16 +378,26 @@ def test_currently_reading_resource_registered():
 
 
 def test_currently_reading_resource_content(mock_apple_books):
-    """Reading the resource returns the most recent in-progress book with its annotations."""
+    """The resource is a lean pointer — metadata + ids only, no chapter
+    text, no annotations list. Claude fetches richer context on demand
+    via list_annotations / get_chapter_content / get_annotation_context.
+    """
     import asyncio
     from apple_books_mcp.server import mcp
 
     result = asyncio.run(mcp.read_resource("apple-books://currently-reading"))
     content = result[0].content if hasattr(result[0], "content") else str(result[0])
+
+    # Metadata + ids — still present.
     assert "Currently Reading: Book 1 by Author 1" in content
     assert "In Progress" in content
-    # Annotations should be included
-    assert "Test text" in content
+    assert "Book id: book1" in content
+    # Annotation count is shown, but the highlight bodies are NOT.
+    assert "Highlights in this book: 1" in content
+    assert "Test text" not in content  # the annotation body stays out
+    # Pointer to list_annotations for richer browsing.
+    assert "list_annotations" in content
+
     mock_apple_books.get_books_in_progress.assert_called_with(limit=1, order_by="-last_opened_date")
 
 
