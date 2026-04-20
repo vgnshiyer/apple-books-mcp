@@ -301,7 +301,20 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
     ``get_chapter_content(book_id, chapter_id)`` on demand. This keeps
     the attached resource small so it doesn't dominate the context
     window.
+
+    Two-tier resolution:
+
+    1. Preferred: :meth:`PyAppleBooks.get_current_reading_chapter`
+       gives a full :class:`Chapter` entry when the CFI's chapter_id
+       matches a ToC item.
+    2. Fallback: many EPUBs store the reading-position CFI against a
+       manifest item id that the ToC doesn't list (sub-section, or a
+       re-numbered spine entry). The chapter is still fetchable via
+       :meth:`get_chapter_content` — we just don't have a human
+       title. Peek at the raw Location and emit the id alone so
+       Claude can still hand it off.
     """
+    # Tier 1: try the clean ToC-resolved chapter first.
     try:
         chapter = api.get_current_reading_chapter(book.id)
     except BookNotDownloadedError:
@@ -319,19 +332,40 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
         logger.warning("current reading chapter unavailable: %s", e)
         return ""
 
-    if chapter is None:
+    if chapter is not None:
+        try:
+            content = api.get_book_content(book.id)
+            total_chapters = len(content.list_chapters())
+        except AppleBooksError as e:
+            logger.warning("chapter count unavailable: %s", e)
+            total_chapters = None
+
+        position = (
+            f"[{chapter.order}/{total_chapters}]" if total_chapters else f"[{chapter.order}]"
+        )
+        return (
+            f"\nCurrent chapter: {position} {chapter.title}"
+            f"\n  Chapter id: {chapter.id}  "
+            f"(pass to get_chapter_content for the text)"
+        )
+
+    # Tier 2: ToC lookup yielded nothing. Peek at the raw position CFI —
+    # sub-section ids still work with get_chapter_content even when the
+    # ToC doesn't carry them.
+    try:
+        bookmark = api.get_current_reading_location(book.id)
+    except AppleBooksError as e:
+        logger.warning("current reading location unavailable: %s", e)
         return ""
 
-    try:
-        content = api.get_book_content(book.id)
-        total_chapters = len(content.list_chapters())
-    except AppleBooksError as e:
-        logger.warning("chapter count unavailable: %s", e)
-        total_chapters = None
+    if (
+        bookmark is not None
+        and getattr(bookmark, "location", None)
+        and bookmark.location.chapter_id
+    ):
+        return (
+            f"\nCurrent chapter id: {bookmark.location.chapter_id}"
+            f"\n  (not in this book's ToC; pass to get_chapter_content for the text)"
+        )
 
-    position = f"[{chapter.order}/{total_chapters}]" if total_chapters else f"[{chapter.order}]"
-    return (
-        f"\nCurrent chapter: {position} {chapter.title}"
-        f"\n  Chapter id: {chapter.id}  "
-        f"(pass to get_chapter_content for the text)"
-    )
+    return ""
