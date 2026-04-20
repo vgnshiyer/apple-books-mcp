@@ -745,11 +745,11 @@ def get_chapter_content(
     book_id: int,
     chapter_id: str,
     offset: int = 0,
-    max_chars: int = None,
+    max_chars: int = 10000,
 ) -> TextContent:
     """
-    Return the plain-text content of a specific chapter, with optional
-    slicing so long chapters don't consume the whole context window.
+    Return the plain-text content of a specific chapter, paginated by
+    default so a long chapter can't blow up the context window.
 
     ``chapter_id`` should come from a prior ``list_book_chapters`` call
     (or from the ``(ch=...)`` suffix printed on annotation listing rows).
@@ -757,10 +757,13 @@ def get_chapter_content(
     order rendered as a string (e.g. ``"5"``). Only works for non-DRM
     EPUBs that have been downloaded to this Mac.
 
-    Pagination is opt-in — the tool never truncates on its own. If you
-    don't pass ``max_chars``, you get the whole chapter, however long.
-    To sample a long chapter, pass ``max_chars`` (and optionally
-    ``offset`` for continuation).
+    Default ``max_chars=10000`` (~2500 words) covers most typical
+    chapters in a single call; chapters under this cap return as
+    ``(full chapter returned: N chars.)``. Longer chapters return the
+    first slice with a pagination footer naming the exact ``offset``
+    to pass next. Raise ``max_chars`` if you're confident the chapter
+    is short, or pass ``max_chars=None`` to get everything in one
+    call (use sparingly — some chapters run to 50k+ chars).
 
     Every response ends with an explicit footer showing the exact
     ``offset`` / ``end`` / ``total`` character counts, so you can
@@ -768,9 +771,9 @@ def get_chapter_content(
     Example footers::
 
         (full chapter returned: 4,872 chars.)
-        …(returned chars 0–8000 of 24,311 [8000 chars]. Call again with
-          offset=8000 to continue; 16,311 chars remaining.)
-        (returned chars 16000–24311 of 24311 [8311 chars]. End of chapter.)
+        …(returned chars 0–10000 of 24,311 [10000 chars]. Call again with
+          offset=10000 to continue; 14,311 chars remaining.)
+        (returned chars 20000–24311 of 24311 [4311 chars]. End of chapter.)
 
     Args:
         book_id: The book's numeric ID.
@@ -778,10 +781,10 @@ def get_chapter_content(
         offset: Character offset to start from (0 = start of chapter).
             Useful for paginating through a long chapter without
             re-reading the part you've already seen.
-        max_chars: Maximum characters to return in this call. Omit (or
-            pass ``None``) to get the whole chapter from ``offset``
-            onward. Set to something like ``8000`` when you want to
-            sample a long chapter without blowing up the context.
+        max_chars: Maximum characters to return in this call. Defaults
+            to 10000 — enough for ~2500 words of reasoning without
+            eating the context. Pass a higher value when you need more
+            in one shot, or ``None`` to return the entire chapter.
     """
     try:
         content = apple_books.get_book_content(book_id)
@@ -809,9 +812,12 @@ def get_chapter_content(
 
     total_chars = len(text)
 
-    # Clamp offset to the chapter's length — an out-of-range offset
-    # should fail soft with a clear message instead of silently
-    # returning "".
+    # Validate inputs before slicing. ``max_chars=None`` is the
+    # documented opt-out for pagination — treated as "read to end".
+    if max_chars is not None and max_chars <= 0:
+        return TextContent(
+            type="text", text="max_chars must be a positive integer."
+        )
     if offset < 0:
         offset = 0
     if offset >= total_chars:
@@ -823,21 +829,12 @@ def get_chapter_content(
             ),
         )
 
-    if max_chars is None:
-        sliced = text[offset:]
-        end = total_chars
-    else:
-        if max_chars <= 0:
-            return TextContent(
-                type="text", text="max_chars must be a positive integer."
-            )
-        end = min(offset + max_chars, total_chars)
-        sliced = text[offset:end]
+    # Slice. Either cap at max_chars or read through to the end.
+    end = total_chars if max_chars is None else min(offset + max_chars, total_chars)
+    sliced = text[offset:end]
 
-    # Always append a pagination footer so Claude sees exactly what it
-    # just received and whether there's more. The tool does not auto-
-    # paginate — if Claude wants the rest, it calls again with the
-    # suggested offset.
+    # Footer always shows the exact bounds so Claude can paginate
+    # (or stop) without guessing what it just received.
     returned = end - offset
     remaining = total_chars - end
     if remaining > 0:
