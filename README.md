@@ -130,6 +130,12 @@ python -m apple_books_mcp
 docker run -v ~/Library/Containers/com.apple.iBooksX/Data/Documents:/root/Library/Containers/com.apple.iBooksX/Data/Documents:ro ghcr.io/vgnshiyer/apple-books-mcp:latest
 ```
 
+## First-run permission prompt (macOS)
+
+On first use, macOS will ask whether `uvx` (or `python` / `docker`, depending on how you launched) may "access data from other apps." Click **Allow** — the MCP reads Apple Books' private container at `~/Library/Containers/com.apple.iBooksX/`, which macOS treats as another app's sandboxed data. Access is read-only and scoped to that container; the server starts successfully either way, but without permission every tool comes back empty.
+
+![macOS permission prompt: uvx would like to access data from other apps. Don't Allow / Allow.](./docs/permission-prompt.png)
+
 ## Configuration
 
 ### Claude Desktop Setup

@@ -15,7 +15,9 @@ from py_apple_books.exceptions import (
 from apple_books_mcp.utils import (
     _build_current_reading_section,
     _chapter_title_map,
+    _format_book_row,
     _format_book_with_progress,
+    _format_collection_row,
     _format_flat_with_timestamp,
     _format_grouped_by_book,
     _format_lean_row,
@@ -33,33 +35,45 @@ apple_books = PyAppleBooks()
 @mcp.tool()
 def list_all_collections(limit: int = None) -> TextContent:
     """
-    List all collections in my Apple Books library.
+    List all collections in my Apple Books library. Output is one row
+    per collection: ``[id] title``. Use ``describe_collection(id)`` for
+    details or ``get_collection_books(id)`` to list its books.
 
     Args:
         limit: Maximum number of collections to return.
     """
-    collections = apple_books.list_collections(limit=limit)
-    collections_str = "\n".join([f"{str(collection)}\n" for collection in collections])
-    return TextContent(
-        type="text",
-        text=f"Collections:\n{collections_str}"
-    )
+    collections = list(apple_books.list_collections(limit=limit))
+    if not collections:
+        return TextContent(type="text", text="No collections in library.")
+    lines = [_format_collection_row(c) for c in collections]
+    return TextContent(type="text", text="\n".join(lines))
 
 
 @mcp.tool()
 def get_collection_books(collection_id: str) -> TextContent:
     """
-    Get all books in a particular collection.
+    List the books in a collection as lean rows: ``[id] title by
+    author``. Descriptions are intentionally omitted — collections
+    with many books would otherwise emit tens of thousands of chars of
+    marketing blurb. Use ``describe_book(id)`` for details on any
+    specific book.
 
     Args:
         collection_id: The ID of the collection to get books from.
     """
-    collection = apple_books.get_collection_by_id(collection_id)
-    books_str = "\n".join([f"{str(book)}\n" for book in collection.books])
-    return TextContent(
-        type="text",
-        text=f"Books:\n{books_str}"
-    )
+    try:
+        collection = apple_books.get_collection_by_id(collection_id)
+    except IndexError:
+        return TextContent(
+            type="text", text=f"No collection found with id {collection_id}."
+        )
+    books = list(collection.books)
+    title = getattr(collection, "title", None) or "Untitled Collection"
+    header = f"{title} ({len(books)} book{'s' if len(books) != 1 else ''})"
+    if not books:
+        return TextContent(type="text", text=f"{header}\n\n(empty)")
+    lines = [header, ""] + [f"  {_format_book_row(b)}" for b in books]
+    return TextContent(type="text", text="\n".join(lines))
 
 
 @mcp.tool()
@@ -104,34 +118,35 @@ def describe_collection(collection_id: str) -> TextContent:
 @mcp.tool()
 def search_collections_by_title(title: str) -> TextContent:
     """
-    Search for collections by title.
+    Search for collections by title (substring match). Output is one
+    row per match: ``[id] title``.
 
     Args:
         title: The title to search for.
     """
-    collections = apple_books.get_collection_by_title(title)
-    collections_str = "\n".join([f"{str(collection)}\n" for collection in collections])
-    return TextContent(
-        type="text",
-        text=f"Collections:\n{collections_str}"
-    )
+    collections = list(apple_books.get_collection_by_title(title))
+    if not collections:
+        return TextContent(type="text", text=f"No collections matched {title!r}.")
+    lines = [_format_collection_row(c) for c in collections]
+    return TextContent(type="text", text="\n".join(lines))
 
 
 # -- Books Tools --
 @mcp.tool()
 def list_all_books(limit: int = None) -> TextContent:
     """
-    List all books in my Apple Books library.
+    List all books in my Apple Books library. Output is one row per
+    book: ``[id] title by author``. Use ``describe_book(id)`` for
+    details on any book.
 
     Args:
         limit: Maximum number of books to return.
     """
-    books = apple_books.list_books(limit=limit)
-    books_str = "\n".join([f"{str(book)}\n" for book in books])
-    return TextContent(
-        type="text",
-        text=f"Books:\n{books_str}"
-    )
+    books = list(apple_books.list_books(limit=limit))
+    if not books:
+        return TextContent(type="text", text="No books in library.")
+    lines = [_format_book_row(b) for b in books]
+    return TextContent(type="text", text="\n".join(lines))
 
 
 @mcp.tool()
@@ -196,94 +211,96 @@ def describe_book(book_id: str) -> TextContent:
 @mcp.tool()
 def search_books_by_title(title: str) -> TextContent:
     """
-    Search for books by title.
+    Search for books by title (substring match). Output is one row per
+    match: ``[id] title by author``. Use ``describe_book(id)`` for
+    details.
 
     Args:
         title: The title to search for.
     """
-    books = apple_books.get_book_by_title(title)
-    books_str = "\n".join([f"{str(book)}\n" for book in books])
-    return TextContent(
-        type="text",
-        text=f"Books:\n{books_str}"
-    )
+    books = list(apple_books.get_book_by_title(title))
+    if not books:
+        return TextContent(type="text", text=f"No books matched {title!r}.")
+    lines = [_format_book_row(b) for b in books]
+    return TextContent(type="text", text="\n".join(lines))
 
 
 @mcp.tool()
 def get_books_by_genre(genre: str, limit: int = None) -> TextContent:
     """
     Get books whose genre matches the given string (substring match).
+    Output is one row per match: ``[id] title by author (genre)``.
 
     Args:
         genre: The genre to search for (e.g. "Romance", "Philosophy").
         limit: Maximum number of books to return.
     """
-    books = apple_books.get_books_by_genre(genre, limit=limit)
-    books_str = "\n".join([
-        f"{getattr(book, 'title', 'Unknown')} by {getattr(book, 'author', 'Unknown')} ({getattr(book, 'genre', None)})"
-        for book in books
-    ])
-    return TextContent(
-        type="text",
-        text=f"Books:\n{books_str}"
-    )
+    books = list(apple_books.get_books_by_genre(genre, limit=limit))
+    if not books:
+        return TextContent(type="text", text=f"No books matched genre {genre!r}.")
+    lines = [
+        f"{_format_book_row(b)} ({getattr(b, 'genre', None) or '?'})"
+        for b in books
+    ]
+    return TextContent(type="text", text="\n".join(lines))
 
 
 # -- Reading Status Tools --
+#
+# Every row carries the book_id as the leading ``[N]`` so Claude can
+# hand off to describe_book, list_annotations, or
+# get_current_reading_position without a second lookup.
 @mcp.tool()
 def get_books_in_progress(limit: int = None) -> TextContent:
     """
-    Get all books currently being read (progress > 0% and < 100%).
+    Get books currently being read (progress > 0% and < 100%). Output
+    per row: ``[id] title by author`` with a progress summary below.
 
     Args:
         limit: Maximum number of books to return.
     """
-    books = apple_books.get_books_in_progress(limit=limit)
-    books_str = "\n".join([
-        _format_book_with_progress(book)
-        for book in books
-    ])
+    books = list(apple_books.get_books_in_progress(limit=limit))
+    if not books:
+        return TextContent(type="text", text="No books in progress.")
     return TextContent(
         type="text",
-        text=f"Books in progress:\n{books_str}"
+        text="\n".join(_format_book_with_progress(b) for b in books),
     )
 
 
 @mcp.tool()
 def get_finished_books(limit: int = None) -> TextContent:
     """
-    Get all books that have been finished.
+    Get books that have been finished. Output per row: ``[id] title
+    by author`` with a progress summary below.
 
     Args:
         limit: Maximum number of books to return.
     """
-    books = apple_books.get_finished_books(limit=limit)
-    books_str = "\n".join([
-        _format_book_with_progress(book)
-        for book in books
-    ])
+    books = list(apple_books.get_finished_books(limit=limit))
+    if not books:
+        return TextContent(type="text", text="No finished books yet.")
     return TextContent(
         type="text",
-        text=f"Finished books:\n{books_str}"
+        text="\n".join(_format_book_with_progress(b) for b in books),
     )
 
 
 @mcp.tool()
 def get_unstarted_books(limit: int = None) -> TextContent:
     """
-    Get all books that haven't been started yet (0% progress).
+    Get books that haven't been started yet (0% progress). Output per
+    row: ``[id] title by author`` with a progress summary below.
 
     Args:
         limit: Maximum number of books to return.
     """
-    books = apple_books.get_unstarted_books(limit=limit)
-    books_str = "\n".join([
-        _format_book_with_progress(book)
-        for book in books
-    ])
+    books = list(apple_books.get_unstarted_books(limit=limit))
+    if not books:
+        return TextContent(type="text", text="No unstarted books.")
     return TextContent(
         type="text",
-        text=f"Unstarted books:\n{books_str}"
+        text="\n".join(_format_book_with_progress(b) for b in books),
     )
 
 
@@ -291,18 +308,18 @@ def get_unstarted_books(limit: int = None) -> TextContent:
 def get_recently_read_books(limit: int = 10) -> TextContent:
     """
     Get most recently opened books, ordered by last opened date.
+    Output per row: ``[id] title by author`` with a progress summary
+    below.
 
     Args:
         limit: Maximum number of books to return. Defaults to 10.
     """
-    books = apple_books.get_recently_read_books(limit=limit)
-    books_str = "\n".join([
-        _format_book_with_progress(book)
-        for book in books
-    ])
+    books = list(apple_books.get_recently_read_books(limit=limit))
+    if not books:
+        return TextContent(type="text", text="No recently-read books.")
     return TextContent(
         type="text",
-        text=f"Recently read books:\n{books_str}"
+        text="\n".join(_format_book_with_progress(b) for b in books),
     )
 
 
@@ -862,13 +879,19 @@ def get_current_reading_position(book_id: int) -> TextContent:
     focus on a specific book rather than the global ``currently-reading``
     resource.
 
-    Returns the chapter metadata only (title, order, href). For the chapter
-    text, follow up with ``get_chapter_content``. Only works for non-DRM
-    EPUBs that have been downloaded to this Mac.
+    Returns chapter metadata only. For the chapter text, follow up with
+    ``get_chapter_content``. Only works for non-DRM EPUBs that have been
+    downloaded to this Mac.
+
+    Two-tier resolution: first tries the clean ToC-resolved chapter; if
+    the CFI points to a manifest item the ToC doesn't carry (sub-section
+    or re-numbered spine entry), falls back to emitting just the
+    chapter_id so it's still actionable with ``get_chapter_content``.
 
     Args:
         book_id: The book's numeric ID.
     """
+    # Tier 1: ToC-resolved chapter.
     try:
         chapter = apple_books.get_current_reading_chapter(book_id)
     except BookNotDownloadedError as e:
@@ -882,20 +905,46 @@ def get_current_reading_position(book_id: int) -> TextContent:
             type="text", text=f"No book found with id {book_id}."
         )
 
-    if chapter is None:
+    if chapter is not None:
         return TextContent(
             type="text",
-            text="No reading position recorded for this book yet.",
+            text=(
+                f"Current chapter: [{chapter.order}] {chapter.title}  "
+                f'(use get_chapter_content({book_id}, "{chapter.id}") for the text)\n'
+                f"  Depth in ToC: {chapter.depth}\n"
+                f"  File: {chapter.href}"
+            ),
+        )
+
+    # Tier 2: ToC lookup empty. Peek at the raw position CFI —
+    # sub-section ids still work with get_chapter_content even when the
+    # ToC doesn't carry them. Same fallback used by the
+    # currently-reading resource.
+    try:
+        bookmark = apple_books.get_current_reading_location(book_id)
+    except AppleBooksError as e:
+        logger.warning("current reading location unavailable: %s", e)
+        return TextContent(
+            type="text", text="No reading position recorded for this book yet."
+        )
+
+    if (
+        bookmark is not None
+        and getattr(bookmark, "location", None)
+        and bookmark.location.chapter_id
+    ):
+        cid = bookmark.location.chapter_id
+        return TextContent(
+            type="text",
+            text=(
+                f"Current chapter id: {cid}  "
+                f'(use get_chapter_content({book_id}, "{cid}") for the text)'
+            ),
         )
 
     return TextContent(
         type="text",
-        text=(
-            f"Current chapter: [{chapter.order}] {chapter.title}\n"
-            f"Chapter id (for get_chapter_content): {chapter.id}\n"
-            f"Depth in ToC: {chapter.depth}\n"
-            f"File: {chapter.href}"
-        ),
+        text="No reading position recorded for this book yet.",
     )
 
 
@@ -917,28 +966,40 @@ def get_library_stats() -> TextContent:
 
     total_annotations = len(annotations)
 
-    # Count annotations per book
-    anno_counts = {}
+    # Count annotations per book, keeping orphans (annotations whose
+    # asset_id no longer maps to a book in the library) in a separate
+    # bucket — otherwise they cluster into a misleading "Unknown Book"
+    # entry that dominates the "most annotated" list.
+    anno_counts: dict = {}
+    orphan_count = 0
     for anno in annotations:
-        title = _get_book_title(anno)
-        anno_counts[title] = anno_counts.get(title, 0) + 1
+        book = getattr(anno, "book", None)
+        if book is None:
+            orphan_count += 1
+            continue
+        key = (book.id, book.title or "Unknown Title")
+        anno_counts[key] = anno_counts.get(key, 0) + 1
 
     top_annotated = sorted(anno_counts.items(), key=lambda x: x[1], reverse=True)[:5]
-    top_str = "\n".join([f"  {title}: {count}" for title, count in top_annotated])
-
-    stats = (
-        f"Total books: {total_books}\n"
-        f"Finished: {finished}\n"
-        f"In progress: {in_progress}\n"
-        f"Unstarted: {unstarted}\n"
-        f"Total annotations: {total_annotations}\n"
-        f"Most annotated books:\n{top_str}"
+    top_str = "\n".join(
+        f"  [{bid}] {title}: {count}" for (bid, title), count in top_annotated
     )
 
-    return TextContent(
-        type="text",
-        text=stats
-    )
+    lines = [
+        f"Total books: {total_books}",
+        f"  Finished: {finished}",
+        f"  In progress: {in_progress}",
+        f"  Unstarted: {unstarted}",
+        f"Total annotations: {total_annotations}",
+    ]
+    if orphan_count:
+        lines.append(
+            f"  ({orphan_count} from books no longer in the library)"
+        )
+    lines.append("Most annotated books:")
+    lines.append(top_str if top_annotated else "  (none)")
+
+    return TextContent(type="text", text="\n".join(lines))
 
 
 # -- Resources --
