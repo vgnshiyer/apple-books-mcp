@@ -14,6 +14,7 @@ Model Context Protocol (MCP) server for Apple Books.
 
 * Ask Claude to summarize your recent highlights
 * Ask Claude what books you're currently reading and your progress
+* Ask Claude to pick up where you left off — it can see the chapter you're on *and* its text
 * Ask Claude to find a book by title
 * Ask Claude to organize books in your library by genre
 * Ask Claude to recommend similar books based on your reading history
@@ -39,8 +40,8 @@ And much more!
 | Tool | Description | Parameters |
 |------|-------------|------------|
 | list_all_books | List all books | limit?: int |
-| describe_book | Get details of a particular book | book_id: str |
-| get_book_annotations | Get all annotations for a book | book_id: str |
+| describe_book | Get details of a particular book (metadata, progress, annotation count, description) | book_id: str |
+| list_annotations | Get all annotations for a book (id + text + chapter per row, chapter-ordered) | book_id: int, limit?: int |
 | search_books_by_title | Search for books by title | title: str |
 | get_books_by_genre | Get books by genre (substring match) | genre: str, limit?: int |
 
@@ -57,14 +58,14 @@ And much more!
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| list_all_annotations | List all annotations | limit?: int |
-| recent_annotations | Get most recent annotations | limit?: int (default: 10) |
-| describe_annotation | Get details of an annotation | annotation_id: str |
-| get_highlights_by_color | Get all highlights by color | color: str, limit?: int |
-| search_highlighted_text | Search highlights by text | text: str, limit?: int |
-| search_notes | Search annotations by note | note: str, limit?: int |
-| full_text_search | Search annotations by any text | text: str, limit?: int |
-| get_annotations_by_date_range | Get annotations within a date range | after?: YYYY-MM-DD, before?: YYYY-MM-DD, limit?: int |
+| list_all_annotations | Browse every annotation grouped by book, newest first | limit?: int |
+| recent_annotations | Get most recent annotations (flat, with date + book per row) | limit?: int (default: 10) |
+| describe_annotation | Get full details of a single annotation | annotation_id: str |
+| get_annotation_context | Text window around a highlight (the paragraph it's in), with the highlight marked `«...»` | annotation_id: int, chars_before?: int (default: 500), chars_after?: int (default: 500) |
+| get_highlights_by_color | Highlights of a particular color, grouped by book | color: str, limit?: int |
+| search_notes | Search user notes (shows highlight + note inline) | note: str, limit?: int |
+| search_annotations | Search across highlights + notes + surrounding text | text: str, limit?: int |
+| get_annotations_by_date_range | Annotations within a date range (flat, with date + book per row) | after?: YYYY-MM-DD, before?: YYYY-MM-DD, limit?: int |
 
 ### Library Stats
 
@@ -72,13 +73,23 @@ And much more!
 |------|-------------|------------|
 | get_library_stats | Get library summary with reading stats | None |
 
+### Book Content
+
+Only works for non-DRM EPUBs (imported books, Project Gutenberg, Standard Ebooks, etc.). Apple Books Store purchases are FairPlay-protected and return a clear error. iCloud-only books return a "not downloaded" hint.
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| list_book_chapters | Table of contents for a book (chapter titles, order, nesting) | book_id: int |
+| get_chapter_content | Plain-text content of a chapter, with optional `offset` + `max_chars` slicing | book_id: int, chapter_id: str, offset?: int, max_chars?: int |
+| get_current_reading_position | The chapter the user last left off reading (via Apple Books' auto-bookmark CFI) | book_id: int |
+
 ## Available Resources
 
 Attachable data objects accessible from Claude Desktop's resource picker.
 
 | Resource | URI | Description |
 |----------|-----|-------------|
-| Currently Reading | `apple-books://currently-reading` | The book you're reading right now — most recently opened in-progress book, with its metadata and recent annotations. Attach to any conversation to focus Claude on your current read. |
+| Currently Reading | `apple-books://currently-reading` | The book you're reading right now — most recently opened in-progress book, with metadata, **the chapter you left off on plus a preview of its text** (for non-DRM EPUBs), and recent annotations. Attach to any conversation to focus Claude on your current read. |
 
 ## Available Prompts
 
@@ -170,7 +181,8 @@ docker run -v ~/Library/Containers/com.apple.iBooksX/Data/Documents:/root/Librar
 
 ## Upcoming Features
 
-- [ ] book content access for non-DRM EPUBs
+- [ ] PDF content access (currently EPUB-only)
+- [ ] fuller annotation context via CFI → paragraph resolution
 
 ## Contribution
 
