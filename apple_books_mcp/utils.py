@@ -31,12 +31,6 @@ logger = logging.getLogger("apple-books-mcp")
 # Constants
 # --------------------------------------------------------------------------
 
-# Approximate cap on how much chapter text to include in the
-# currently-reading resource. Picked so a typical book chapter fits
-# without blowing up the attached context — ~2000 words / 8000 chars is
-# plenty for Claude to engage with the passage.
-_CURRENT_CHAPTER_CHAR_CAP = 8000
-
 # Max characters shown for a single annotation in list-style outputs.
 # Typical highlights are 1–3 sentences (50–200 chars); this cap keeps
 # each row a single readable line without truncating most.
@@ -58,23 +52,6 @@ def _format_book_with_progress(book) -> str:
 def _get_book_title(annotation) -> str:
     book = getattr(annotation, "book", None)
     return getattr(book, "title", None) or "Unknown Book"
-
-
-def _annotation_body(annotation) -> str:
-    """Pick the most informative text for the annotation.
-
-    ``representative_text`` contains the surrounding sentence/paragraph;
-    ``selected_text`` is what the user specifically highlighted. They're
-    often identical, but when they differ the fuller context is usually
-    more useful to the model — while the specific highlight still
-    carries signal about what the reader zeroed in on.
-    """
-    rep = (getattr(annotation, "representative_text", None) or "").strip()
-    sel = (getattr(annotation, "selected_text", None) or "").strip()
-
-    if rep and sel and rep != sel and len(rep) > len(sel) + 20:
-        return f"{rep} ↳ highlighted: \"{sel}\""
-    return rep or sel
 
 
 # ``_format_annotation_with_book`` (legacy) was dropped in v0.7.0 — it
@@ -315,12 +292,15 @@ def _chapter_title_map(api: "PyAppleBooks", book_id: int) -> dict:
 
 
 def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
-    """Return a human-readable 'you left off on…' block, or '' if we
-    can't read the book's content (DRM, not downloaded, no bookmark).
+    """Return a compact 'you left off on…' metadata block, or '' if we
+    can't resolve the user's reading position (DRM, not downloaded, no
+    bookmark).
 
-    Intentionally soft-failing: a missing chapter shouldn't break the
-    currently_reading resource — the annotations section is still
-    valuable even when content access is unavailable.
+    Lean-by-design: emits only the chapter's title, order, and id —
+    never the chapter text. If Claude wants the text, it calls
+    ``get_chapter_content(book_id, chapter_id)`` on demand. This keeps
+    the attached resource small so it doesn't dominate the context
+    window.
     """
     try:
         chapter = api.get_current_reading_chapter(book.id)
@@ -333,7 +313,7 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
         return (
             "\nCurrent chapter: not readable — this is a DRM-protected "
             "Apple Books Store purchase; only imported EPUBs expose their "
-            "chapter text."
+            "chapter metadata."
         )
     except AppleBooksError as e:
         logger.warning("current reading chapter unavailable: %s", e)
@@ -345,28 +325,13 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
     try:
         content = api.get_book_content(book.id)
         total_chapters = len(content.list_chapters())
-        full_text = content.get_chapter(chapter.id)
     except AppleBooksError as e:
-        logger.warning("chapter content unavailable: %s", e)
-        return (
-            f"\nCurrent chapter: [{chapter.order}] {chapter.title}\n"
-            f"(chapter text unavailable)"
-        )
+        logger.warning("chapter count unavailable: %s", e)
+        total_chapters = None
 
-    header = f"\nCurrent chapter: [{chapter.order}/{total_chapters}] {chapter.title}"
-
-    # Some EPUB sections are image-only (cover pages, part dividers that are
-    # rendered as a JPG). Extraction returns an empty string in that case —
-    # skip the "--- chapter text ---" block rather than emit an empty one.
-    if not full_text.strip():
-        return f"{header}\n(This chapter has no extractable text, likely an image-only page.)"
-
-    truncated = full_text[:_CURRENT_CHAPTER_CHAR_CAP]
-    suffix = (
-        f"\n\n…(truncated after {_CURRENT_CHAPTER_CHAR_CAP:,} chars; "
-        f"chapter continues for {len(full_text) - _CURRENT_CHAPTER_CHAR_CAP:,} more)"
-        if len(full_text) > _CURRENT_CHAPTER_CHAR_CAP
-        else ""
+    position = f"[{chapter.order}/{total_chapters}]" if total_chapters else f"[{chapter.order}]"
+    return (
+        f"\nCurrent chapter: {position} {chapter.title}"
+        f"\n  Chapter id: {chapter.id}  "
+        f"(pass to get_chapter_content for the text)"
     )
-
-    return f"{header}\n\n--- chapter text ---\n{truncated}{suffix}"

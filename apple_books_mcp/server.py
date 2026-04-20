@@ -13,7 +13,6 @@ from py_apple_books.exceptions import (
 )
 
 from apple_books_mcp.utils import (
-    _annotation_body,
     _build_current_reading_section,
     _chapter_title_map,
     _format_book_with_progress,
@@ -949,12 +948,24 @@ def get_library_stats() -> TextContent:
 @mcp.resource(
     "apple-books://currently-reading",
     name="Currently Reading",
-    description="The book you're actively reading right now — the most recently opened in-progress book, with its metadata, the chapter you left off on (plus a preview of its text when the book isn't DRM-protected), and recent annotations. Attach this to any conversation to give Claude your current reading context.",
+    description=(
+        "A lightweight pointer to the book you're actively reading right "
+        "now — title, author, ids, progress, and the chapter you last "
+        "left off on. Attach this to any conversation to give Claude your "
+        "reading context without pulling chapter text or annotations; "
+        "Claude can fetch those on demand via get_chapter_content, "
+        "list_annotations, and get_annotation_context."
+    ),
     mime_type="text/plain",
 )
 def currently_reading_resource() -> str:
-    """The most recently opened in-progress book, plus where the user left
-    off (chapter + text preview) and their recent annotations."""
+    """Lean resource: metadata + ids + chapter pointer.
+
+    By design this does NOT embed chapter text or annotations — pulling
+    them eagerly inflated attached context by ~10–15k chars per use.
+    The resource now weighs in at ~300 chars and hands Claude the
+    book_id + chapter_id it needs to fetch richer content on demand.
+    """
     books = list(apple_books.get_books_in_progress(limit=1, order_by="-last_opened_date"))
     if not books:
         return "No book currently in progress."
@@ -962,50 +973,32 @@ def currently_reading_resource() -> str:
     book = books[0]
     author = getattr(book, "author", None) or "Unknown Author"
     title = getattr(book, "title", None) or "Unknown Title"
-    description = getattr(book, "description", None) or ""
-    progress_summary = book.format_progress_summary()
 
     sections: list[str] = [
         f"Currently Reading: {title} by {author}",
-        progress_summary,
+        f"  Book id: {book.id}",
+        f"  {book.format_progress_summary()}",
     ]
-    if description:
-        sections.append(f"\nAbout: {description}")
 
-    # --- current chapter + preview (new in v0.7.0) ------------------------
-    #
-    # Apple Books auto-tracks the reader's position as a zero-width
-    # bookmark annotation with an EPUB CFI. When the book is readable
-    # (non-DRM, locally downloaded), surface the chapter the user left
-    # off on plus a bounded text preview so Claude can engage with
-    # what the user is actually in the middle of.
+    # Current chapter pointer — metadata only, no text.
     reading_section = _build_current_reading_section(apple_books, book)
     if reading_section:
         sections.append(reading_section)
 
-    # --- recent annotations -----------------------------------------------
-    annotations = sorted(
-        getattr(book, "annotations", []) or [],
-        key=lambda a: getattr(a, "creation_date", None) or "",
-        reverse=True,
-    )
-    # Cap to most recent 50 to keep the attached context manageable.
-    annotations = annotations[:50]
+    # Annotation count only — keeps the resource cheap. Claude can call
+    # list_annotations(book_id) when it actually wants to browse them.
+    try:
+        anno_count = len(list(book.annotations))
+    except Exception:
+        anno_count = 0
+    if anno_count:
+        sections.append(
+            f"\nHighlights in this book: {anno_count}  "
+            f"(use list_annotations({book.id}) to browse)"
+        )
+    else:
+        sections.append("\nHighlights in this book: 0")
 
-    if not annotations:
-        sections.append("\nNo annotations in this book yet.")
-        return "\n".join(sections)
-
-    ann_lines = [f"\nRecent annotations ({len(annotations)} shown):\n"]
-    for anno in annotations:
-        created = getattr(anno, "creation_date", None)
-        timestamp = created.strftime("%Y-%m-%dT%H:%M:%S") if created else "unknown"
-        chapter = getattr(anno, "chapter", None)
-        body = _annotation_body(anno)
-        chapter_tag = f" (Chapter: {chapter})" if chapter else ""
-        ann_lines.append(f"[{timestamp}]{chapter_tag} {body}")
-
-    sections.append("\n".join(ann_lines))
     return "\n".join(sections)
 
 

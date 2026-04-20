@@ -378,16 +378,26 @@ def test_currently_reading_resource_registered():
 
 
 def test_currently_reading_resource_content(mock_apple_books):
-    """Reading the resource returns the most recent in-progress book with its annotations."""
+    """The resource is a lean pointer — metadata + ids only, no chapter
+    text, no annotations list. Claude fetches richer context on demand
+    via list_annotations / get_chapter_content / get_annotation_context.
+    """
     import asyncio
     from apple_books_mcp.server import mcp
 
     result = asyncio.run(mcp.read_resource("apple-books://currently-reading"))
     content = result[0].content if hasattr(result[0], "content") else str(result[0])
+
+    # Metadata + ids — still present.
     assert "Currently Reading: Book 1 by Author 1" in content
     assert "In Progress" in content
-    # Annotations should be included
-    assert "Test text" in content
+    assert "Book id: book1" in content
+    # Annotation count is shown, but the highlight bodies are NOT.
+    assert "Highlights in this book: 1" in content
+    assert "Test text" not in content  # the annotation body stays out
+    # Pointer to list_annotations for richer browsing.
+    assert "list_annotations" in content
+
     mock_apple_books.get_books_in_progress.assert_called_with(limit=1, order_by="-last_opened_date")
 
 
