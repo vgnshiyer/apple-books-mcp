@@ -12,13 +12,10 @@ Model Context Protocol (MCP) server for Apple Books.
 
 ## At a glance
 
-* Ask Claude to summarize your recent highlights
-* Ask Claude what books you're currently reading and your progress
-* Ask Claude to pick up where you left off — it can see the chapter you're on *and* its text
-* Ask Claude to find a book by title
-* Ask Claude to organize books in your library by genre
-* Ask Claude to recommend similar books based on your reading history
-* Ask Claude to compare notes from different books read on the same subject
+* **Pick up where you left off** — Claude sees the chapter you're on *and* its text, plus recent highlights in the book.
+* **Expand on any highlight** — get the surrounding paragraph explained in context, with the exact anchor you marked shown in `«...»`.
+* **Revisit a book** — pull your highlights, cluster them by theme, and quote you back to yourself.
+* **Reflect on your reading** — patterns across books, recurring ideas in your highlights, what you're actually drawn to.
 
 https://github.com/user-attachments/assets/77a5a29b-bfd7-4275-a4af-8d6c51a4527e
 
