@@ -12,7 +12,8 @@ from apple_books_mcp.server import (
     search_notes, search_annotations, recent_annotations,
     describe_annotation, get_annotation_context,
     get_annotations_by_date_range,
-    get_library_stats
+    get_library_stats,
+    get_current_reading_position,
 )
 
 
@@ -425,3 +426,117 @@ def test_get_library_stats(mock_apple_books):
     assert "Book 1" in result.text
     mock_apple_books.list_books.assert_called_once()
     mock_apple_books.list_annotations.assert_called_once()
+
+
+# ---------------------------------------------------------------------------
+# v0.7.1 regression fixes
+# ---------------------------------------------------------------------------
+
+
+def test_list_all_books_uses_bracketed_id_format(mock_apple_books):
+    """v0.7.1: list_all_books emits ``[id] title by author`` per row so
+    Claude can hand off to describe_book / list_annotations without a
+    second lookup. The old raw ``ID:\\nTitle:\\n...`` block is gone."""
+    result = list_all_books()
+    assert "[book1] Book 1 by Author 1" in result.text
+    assert "Description: None" not in result.text  # old format gone
+
+
+def test_search_books_by_title_uses_bracketed_id_format(mock_apple_books):
+    result = search_books_by_title("Book")
+    assert "[book1] Book 1 by Author 1" in result.text
+
+
+def test_get_books_by_genre_includes_book_id(mock_apple_books):
+    """v0.7.1: genre output must include [id] for hand-off."""
+    result = get_books_by_genre("Romance")
+    assert "[book1]" in result.text
+    assert "Romance" in result.text
+
+
+def test_list_all_collections_uses_bracketed_id_format(mock_apple_books):
+    result = list_all_collections()
+    assert "[col1] Collection 1" in result.text
+    assert "Details: None" not in result.text
+
+
+def test_search_collections_by_title_uses_bracketed_id_format(mock_apple_books):
+    result = search_collections_by_title("Collection")
+    assert "[col1] Collection 1" in result.text
+
+
+def test_get_collection_books_omits_description(mock_apple_books):
+    """v0.7.1: get_collection_books returns lean ``[id] title by
+    author`` rows. Book descriptions (which can be 2000+ chars of
+    marketing blurb per book) are intentionally suppressed — a 72-book
+    collection would otherwise emit tens of thousands of chars."""
+    book = mock_apple_books.get_collection_by_id.return_value._books[0]
+    book.description = (
+        "A VERY LONG MARKETING BLURB that should not appear in the output. "
+        * 50
+    )
+    result = get_collection_books("col1")
+    assert "[book1] Book 1 by Author 1" in result.text
+    assert "MARKETING BLURB" not in result.text
+
+
+def test_reading_status_rows_include_book_id(mock_apple_books):
+    """v0.7.1: every reading-status row must carry the book_id as the
+    leading [N] — otherwise Claude can't hand off to per-book tools."""
+    for fn in (get_books_in_progress, get_finished_books,
+               get_unstarted_books, get_recently_read_books):
+        result = fn()
+        assert "[book1]" in result.text, (
+            f"{fn.__name__} missing [book1] id in row"
+        )
+        assert "Book 1 by Author 1" in result.text
+
+
+def test_get_current_reading_position_tier2_fallback(mock_apple_books):
+    """v0.7.1: when get_current_reading_chapter returns None (CFI
+    points to a sub-section not in the ToC), fall back to emitting
+    the raw chapter_id from get_current_reading_location so it's still
+    actionable. Previously this returned a false 'No reading position
+    recorded' message when a position clearly existed."""
+    from unittest.mock import MagicMock
+    # Tier-1 lookup yields nothing (sub-section case)
+    mock_apple_books.get_current_reading_chapter.return_value = None
+    # Tier-2 lookup yields a bookmark whose CFI has a chapter_id
+    bookmark = MagicMock()
+    bookmark.location = MockLocation(
+        cfi="epubcfi(/6/14[chapter001]!/4/10)", chapter_id="chapter001"
+    )
+    mock_apple_books.get_current_reading_location.return_value = bookmark
+
+    result = get_current_reading_position(175)
+    assert "Current chapter id: chapter001" in result.text
+    # The hint must be the literal Claude-callable form, not prose.
+    assert 'get_chapter_content(175, "chapter001")' in result.text
+
+
+def test_get_current_reading_position_truly_absent(mock_apple_books):
+    """When neither tier-1 nor tier-2 yields a position, the message
+    matches reality ('no position recorded'). Regression test so the
+    tier-2 fallback doesn't make us lie in the other direction."""
+    mock_apple_books.get_current_reading_chapter.return_value = None
+    mock_apple_books.get_current_reading_location.return_value = None
+    result = get_current_reading_position(999)
+    assert "No reading position recorded" in result.text
+
+
+def test_library_stats_separates_orphan_annotations(mock_apple_books):
+    """v0.7.1: orphan annotations (book no longer in library) are
+    counted separately instead of clustering under 'Unknown Book' in
+    the 'most annotated' list."""
+    orphan = MockAnnotation()
+    orphan.book = None
+    valid = MockAnnotation()
+    mock_apple_books.list_annotations.return_value = [orphan, valid]
+
+    result = get_library_stats()
+    # 'Unknown Book' should NOT appear in the top list anymore.
+    assert "Unknown Book:" not in result.text
+    # But the orphan count is surfaced separately.
+    assert "from books no longer in the library" in result.text
+    # The valid annotation still shows up under its real book.
+    assert "Book 1" in result.text

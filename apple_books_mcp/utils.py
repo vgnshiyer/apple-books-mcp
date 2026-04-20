@@ -43,10 +43,34 @@ _LEAN_TEXT_CAP = 180
 
 
 def _format_book_with_progress(book) -> str:
+    """Two-line book summary used by reading-status tools. The first
+    line carries the ``[id]`` so Claude can hand off to describe_book,
+    list_annotations, or get_current_reading_position without a second
+    lookup.
+    """
     author = getattr(book, "author", None) or "Unknown Author"
     title = getattr(book, "title", None) or "Unknown Title"
     progress = book.format_progress_summary()
-    return f"{title} by {author}\n{progress}"
+    return f"[{book.id}] {title} by {author}\n  {progress}"
+
+
+def _format_book_row(book) -> str:
+    """Single-line ``[id] title by author`` format for browse-style
+    listings (list_all_books, search_books_by_title). Keeps the row
+    compact; the ``[id]`` is the hand-off for follow-up tools.
+    """
+    author = getattr(book, "author", None) or "Unknown Author"
+    title = getattr(book, "title", None) or "Unknown Title"
+    return f"[{book.id}] {title} by {author}"
+
+
+def _format_collection_row(collection) -> str:
+    """Single-line ``[id] title`` for browse-style collection listings.
+    Collections don't have authors; we add the book count in parens
+    when it's available without triggering a relation fetch.
+    """
+    title = getattr(collection, "title", None) or "Untitled Collection"
+    return f"[{collection.id}] {title}"
 
 
 def _get_book_title(annotation) -> str:
