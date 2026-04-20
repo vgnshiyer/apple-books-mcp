@@ -514,14 +514,33 @@ def test_get_current_reading_position_tier2_fallback(mock_apple_books):
     assert 'get_chapter_content(175, "chapter001")' in result.text
 
 
-def test_get_current_reading_position_truly_absent(mock_apple_books):
-    """When neither tier-1 nor tier-2 yields a position, the message
-    matches reality ('no position recorded'). Regression test so the
-    tier-2 fallback doesn't make us lie in the other direction."""
+def test_get_current_reading_position_tier3_most_recent_highlight(mock_apple_books):
+    """v0.7.2: when the reading-position bookmark exists but has no
+    CFI (Apple Books sometimes writes empty tombstone bookmarks), OR
+    when no bookmark exists at all, fall back to the chapter of the
+    user's most recent annotation. Clearly labeled as a proxy."""
+    # Tier-1 and tier-2 both empty
     mock_apple_books.get_current_reading_chapter.return_value = None
     mock_apple_books.get_current_reading_location.return_value = None
+    # Book has annotations (the mock MockBook has [MockAnnotation()]
+    # set up in the fixture, whose location.chapter_id = "chap1")
     result = get_current_reading_position(999)
-    assert "No reading position recorded" in result.text
+    # Tier-3 output:
+    assert "chap1" in result.text
+    assert 'get_chapter_content(999, "chap1")' in result.text
+    # Must be clearly labeled as inferred, not claimed as authoritative
+    assert "inferred from your most recent highlight" in result.text
+
+
+def test_get_current_reading_position_truly_truly_absent(mock_apple_books):
+    """All three tiers empty: no bookmark, no CFI, no annotations.
+    Message matches reality and tells the user how to fix it."""
+    mock_apple_books.get_current_reading_chapter.return_value = None
+    mock_apple_books.get_current_reading_location.return_value = None
+    book = mock_apple_books.get_book_by_id.return_value
+    book.annotations = []
+    result = get_current_reading_position(999)
+    assert "No reading position and no highlights yet" in result.text
 
 
 def test_library_stats_separates_orphan_annotations(mock_apple_books):
