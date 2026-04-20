@@ -344,9 +344,8 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
             f"[{chapter.order}/{total_chapters}]" if total_chapters else f"[{chapter.order}]"
         )
         return (
-            f"\nCurrent chapter: {position} {chapter.title}"
-            f"\n  Chapter id: {chapter.id}  "
-            f"(pass to get_chapter_content for the text)"
+            f"\nCurrent chapter: {position} {chapter.title}  "
+            f'(use get_chapter_content({book.id}, "{chapter.id}") for the text)'
         )
 
     # Tier 2: ToC lookup yielded nothing. Peek at the raw position CFI —
@@ -363,9 +362,10 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
         and getattr(bookmark, "location", None)
         and bookmark.location.chapter_id
     ):
+        cid = bookmark.location.chapter_id
         return (
-            f"\nCurrent chapter id: {bookmark.location.chapter_id}"
-            f"\n  (not in this book's ToC; pass to get_chapter_content for the text)"
+            f"\nCurrent chapter id: {cid}  "
+            f'(use get_chapter_content({book.id}, "{cid}") for the text)'
         )
 
     return ""
