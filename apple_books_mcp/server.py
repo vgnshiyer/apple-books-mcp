@@ -23,6 +23,7 @@ from apple_books_mcp.utils import (
     _format_lean_row,
     _format_note_row,
     _get_book_title,
+    _resolve_current_chapter,
 )
 
 logger = logging.getLogger("apple-books-mcp")
@@ -327,20 +328,15 @@ def get_recently_read_books(limit: int = 10) -> TextContent:
 @mcp.tool()
 def list_all_annotations(limit: int = None) -> TextContent:
     """
-    Browse all your annotations grouped by book, most recent first.
-    Each row is ``[annotation_id] <text> — <chapter title> (ch=<id>)``.
-    For the surrounding passage of a specific highlight, follow up
-    with ``get_annotation_context(annotation_id)``. For the full
-    chapter, pass the emitted ``ch=<id>`` to ``get_chapter_content``.
-
-    Chapter resolution uses Apple Books' CFI hints; books that can't
-    be opened (DRM, iCloud-only) still appear, just without the
-    chapter suffix.
+    Browse all annotations grouped by book, most recent first. Rows:
+    ``[annotation_id] <text> — <chapter title> (ch=<id>)``. Pass
+    ``ch=<id>`` to ``get_chapter_content`` for the chapter, or call
+    ``get_annotation_context(annotation_id)`` for the passage around
+    a specific highlight.
 
     Args:
-        limit: Maximum number of annotations to return. Applied before
-            grouping; defaults to unlimited, which may produce a very
-            long list on heavily-annotated libraries.
+        limit: Max annotations to return. Unlimited by default — can
+            be very long on heavily-annotated libraries.
     """
     # Default to newest-first — old annotations are often from books
     # the user has since removed from their library (orphan rows), and
@@ -388,17 +384,13 @@ def list_all_annotations(limit: int = None) -> TextContent:
 @mcp.tool()
 def list_annotations(book_id: int, limit: int = None) -> TextContent:
     """
-    List annotations within a specific book. Returns minimal rows —
-    ``[annotation_id] <chapter title>`` — since the caller already
-    scoped the query by book id.
-
-    Ordered by chapter position in the book (reading order), then by
-    creation date for ties. Unresolvable chapters (sub-sections not
-    in the ToC, DRM books) show ``—``.
+    List annotations within a specific book, ordered by chapter
+    position in the book (reading order). Rows are lean —
+    ``[annotation_id] <text> — <chapter> (ch=<id>)``.
 
     Args:
         book_id: The book's numeric ID.
-        limit: Maximum number of annotations to return.
+        limit: Max annotations to return.
     """
     try:
         book = apple_books.get_book_by_id(book_id)
@@ -533,12 +525,9 @@ def recent_annotations(limit: int = 10) -> TextContent:
 @mcp.tool()
 def describe_annotation(annotation_id: str) -> TextContent:
     """
-    Describe a specific annotation in detail — its text, note, book,
-    chapter (with chapter_id for hand-off to ``get_chapter_content``),
-    color, creation date, and raw CFI. Use this when you have an
-    annotation id from one of the listing tools and want the full
-    picture. For just the surrounding paragraph, call
-    ``get_annotation_context`` instead.
+    Describe a specific annotation in detail — text, note, book,
+    chapter, color, creation date. For the passage around the
+    highlight, call ``get_annotation_context`` instead.
 
     Args:
         annotation_id: The annotation's numeric ID.
@@ -606,27 +595,18 @@ def get_annotation_context(
     chars_after: int = 500,
 ) -> TextContent:
     """
-    Return a text window around a single annotation — the passage
-    immediately before and after the user's highlight, snapped to word
-    boundaries. The highlighted text itself is wrapped in guillemets
-    (``«...»``) inside the output so Claude can see the exact anchor.
+    Return the passage around a specific highlight — the text before
+    and after, with the highlight itself wrapped in ``«...»``. Use
+    this to expand on a highlight without fetching the whole chapter.
 
-    Use this to explain or expand on a specific highlight without
-    fetching the whole chapter. For a full-chapter view, follow up with
-    ``get_chapter_content``.
-
-    Only works for non-DRM EPUBs that have been downloaded to this Mac.
-    DRM-protected Apple Books Store purchases, iCloud-only books, and
-    annotations whose CFI has no chapter hint all degrade to a clear
-    "no context available" message.
+    Works for non-DRM EPUBs downloaded to this Mac; degrades with a
+    clear message for DRM-protected books, iCloud-only books, or
+    older annotations that lack the chapter hint.
 
     Args:
-        annotation_id: The annotation's numeric ID (from any of the
-            listing tools).
-        chars_before: Characters of context before the highlight.
-            Default 500.
-        chars_after: Characters of context after the highlight.
-            Default 500.
+        annotation_id: The annotation's numeric ID.
+        chars_before: Chars of context before the highlight. Default 500.
+        chars_after: Chars of context after the highlight. Default 500.
     """
     try:
         anno = apple_books.get_annotation_by_id(annotation_id)
@@ -765,27 +745,18 @@ def get_chapter_content(
     max_chars: int = 10000,
 ) -> TextContent:
     """
-    Return the plain-text content of a specific chapter, paginated by
-    default so a long chapter can't blow up the context window.
+    Return the plain-text content of a chapter, paginated by default
+    to protect the context window. Get ``chapter_id`` from
+    ``list_book_chapters`` or from the ``(ch=...)`` suffix on
+    annotation listing rows. Works for non-DRM EPUBs downloaded to
+    this Mac.
 
-    ``chapter_id`` should come from a prior ``list_book_chapters`` call
-    (or from the ``(ch=...)`` suffix printed on annotation listing rows).
-    It accepts either the ``Chapter.id`` value or the 1-based chapter
-    order rendered as a string (e.g. ``"5"``). Only works for non-DRM
-    EPUBs that have been downloaded to this Mac.
+    Default ``max_chars=10000`` (~2500 words) fits most chapters in
+    one call. Longer chapters return a slice with a footer naming
+    the exact ``offset`` to pass next. ``max_chars=None`` disables
+    pagination.
 
-    Default ``max_chars=10000`` (~2500 words) covers most typical
-    chapters in a single call; chapters under this cap return as
-    ``(full chapter returned: N chars.)``. Longer chapters return the
-    first slice with a pagination footer naming the exact ``offset``
-    to pass next. Raise ``max_chars`` if you're confident the chapter
-    is short, or pass ``max_chars=None`` to get everything in one
-    call (use sparingly — some chapters run to 50k+ chars).
-
-    Every response ends with an explicit footer showing the exact
-    ``offset`` / ``end`` / ``total`` character counts, so you can
-    decide whether to re-call with a new ``offset`` without guessing.
-    Example footers::
+    Every response ends with a footer like one of::
 
         (full chapter returned: 4,872 chars.)
         …(returned chars 0–10000 of 24,311 [10000 chars]. Call again with
@@ -794,14 +765,10 @@ def get_chapter_content(
 
     Args:
         book_id: The book's numeric ID.
-        chapter_id: The chapter identifier or 1-based position.
-        offset: Character offset to start from (0 = start of chapter).
-            Useful for paginating through a long chapter without
-            re-reading the part you've already seen.
-        max_chars: Maximum characters to return in this call. Defaults
-            to 10000 — enough for ~2500 words of reasoning without
-            eating the context. Pass a higher value when you need more
-            in one shot, or ``None`` to return the entire chapter.
+        chapter_id: Chapter identifier, or the 1-based chapter order
+            as a string (e.g. ``"5"``).
+        offset: Character offset to start from. Defaults to 0.
+        max_chars: Max chars to return. Default 10000. ``None`` = no cap.
     """
     try:
         content = apple_books.get_book_content(book_id)
@@ -874,77 +841,84 @@ def get_chapter_content(
 @mcp.tool()
 def get_current_reading_position(book_id: int) -> TextContent:
     """
-    Return the chapter the user last left off reading, based on Apple Books'
-    auto-tracked reading position bookmark. Useful when the caller wants to
-    focus on a specific book rather than the global ``currently-reading``
-    resource.
+    Return where the user last left off reading a book — chapter
+    title and chapter_id, no text. Follow up with
+    ``get_chapter_content`` for the text.
 
-    Returns chapter metadata only. For the chapter text, follow up with
-    ``get_chapter_content``. Only works for non-DRM EPUBs that have been
-    downloaded to this Mac.
-
-    Two-tier resolution: first tries the clean ToC-resolved chapter; if
-    the CFI points to a manifest item the ToC doesn't carry (sub-section
-    or re-numbered spine entry), falls back to emitting just the
-    chapter_id so it's still actionable with ``get_chapter_content``.
+    Works for non-DRM EPUBs downloaded to this Mac. If Apple Books
+    hasn't recorded a position, falls back to inferring from the
+    user's most recent highlight (labeled as such in the output).
 
     Args:
         book_id: The book's numeric ID.
     """
-    # Tier 1: ToC-resolved chapter.
     try:
-        chapter = apple_books.get_current_reading_chapter(book_id)
+        book = apple_books.get_book_by_id(book_id)
+    except IndexError:
+        return TextContent(
+            type="text", text=f"No book found with id {book_id}."
+        )
+
+    try:
+        resolution = _resolve_current_chapter(apple_books, book)
     except BookNotDownloadedError as e:
         return TextContent(type="text", text=f"Book not available: {e}")
     except DRMProtectedError as e:
         return TextContent(type="text", text=f"Book is DRM-protected: {e}")
     except AppleBooksError as e:
         return TextContent(type="text", text=f"Could not resolve position: {e}")
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No book found with id {book_id}."
-        )
 
-    if chapter is not None:
+    if resolution is None:
         return TextContent(
             type="text",
             text=(
-                f"Current chapter: [{chapter.order}] {chapter.title}  "
-                f'(use get_chapter_content({book_id}, "{chapter.id}") for the text)\n'
-                f"  Depth in ToC: {chapter.depth}\n"
-                f"  File: {chapter.href}"
+                "No reading position and no highlights yet — open the "
+                "book to a chapter and read or highlight something, "
+                "then try again."
             ),
         )
 
-    # Tier 2: ToC lookup empty. Peek at the raw position CFI —
-    # sub-section ids still work with get_chapter_content even when the
-    # ToC doesn't carry them. Same fallback used by the
-    # currently-reading resource.
-    try:
-        bookmark = apple_books.get_current_reading_location(book_id)
-    except AppleBooksError as e:
-        logger.warning("current reading location unavailable: %s", e)
-        return TextContent(
-            type="text", text="No reading position recorded for this book yet."
-        )
+    call_hint = (
+        f'(use get_chapter_content({book_id}, "{resolution.chapter_id}") '
+        f"for the text)"
+    )
 
-    if (
-        bookmark is not None
-        and getattr(bookmark, "location", None)
-        and bookmark.location.chapter_id
-    ):
-        cid = bookmark.location.chapter_id
+    if resolution.source == "toc":
         return TextContent(
             type="text",
             text=(
-                f"Current chapter id: {cid}  "
-                f'(use get_chapter_content({book_id}, "{cid}") for the text)'
+                f"Current chapter: [{resolution.order}] {resolution.title}  "
+                f"{call_hint}"
             ),
         )
 
+    if resolution.source == "cfi":
+        return TextContent(
+            type="text",
+            text=(
+                f"Current chapter id: {resolution.chapter_id}  {call_hint}"
+            ),
+        )
+
+    # source == "recent_highlight"
+    label = (
+        "(inferred from your most recent highlight — Apple Books hasn't "
+        "recorded a CFI on the reading bookmark yet)"
+    )
+    if resolution.title:
+        return TextContent(
+            type="text",
+            text=(
+                f"Current chapter: {resolution.title}  {call_hint}\n"
+                f"  {label}"
+            ),
+        )
     return TextContent(
         type="text",
-        text="No reading position recorded for this book yet.",
+        text=(
+            f"Current chapter id: {resolution.chapter_id}  {call_hint}\n"
+            f"  {label}"
+        ),
     )
 
 

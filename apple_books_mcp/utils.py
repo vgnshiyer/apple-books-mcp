@@ -13,7 +13,8 @@ singletons and decoupled from ``server`` import order.
 from __future__ import annotations
 
 import logging
-from typing import Optional, TYPE_CHECKING
+from datetime import datetime
+from typing import NamedTuple, Optional, TYPE_CHECKING
 
 from py_apple_books.exceptions import (
     AppleBooksError,
@@ -315,32 +316,147 @@ def _chapter_title_map(api: "PyAppleBooks", book_id: int) -> dict:
         return {}
 
 
-def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
-    """Return a compact 'you left off on…' metadata block, or '' if we
-    can't resolve the user's reading position (DRM, not downloaded, no
-    bookmark).
+class _ChapterResolution(NamedTuple):
+    """Result of resolving a book's 'current chapter' with its
+    provenance tier. Consumers render the same data differently
+    depending on ``source`` so we don't claim the bookmark told us
+    something the bookmark didn't actually contain.
 
-    Lean-by-design: emits only the chapter's title, order, and id —
-    never the chapter text. If Claude wants the text, it calls
+    ``chapter_id`` is always usable with ``get_chapter_content``;
+    ``title`` and ``order`` may be None when the CFI points at a
+    manifest item the ToC doesn't carry.
+
+    ``source`` values:
+
+    * ``"toc"`` — Apple Books' reading-position bookmark CFI resolves
+      cleanly to a ToC entry. Highest-fidelity answer.
+    * ``"cfi"`` — The bookmark has a CFI but its ``chapter_id`` isn't
+      in the ToC (sub-section or re-numbered spine entry). Still
+      actionable with ``get_chapter_content``.
+    * ``"recent_highlight"`` — Bookmark exists but has no CFI (Apple
+      Books sometimes writes empty tombstones). We proxy with the
+      user's most recent highlight in this book. Clearly labeled
+      downstream so the caller doesn't mistake it for an authoritative
+      position.
+    """
+
+    chapter_id: str
+    title: Optional[str]
+    order: Optional[int]
+    total_chapters: Optional[int]
+    source: str
+
+
+def _most_recent_highlight_chapter(book) -> Optional[tuple[str, object]]:
+    """Return (chapter_id, annotation) for the most recent annotation
+    in this book whose CFI carries a chapter_id. None if the book has
+    no annotations, or no annotations with a chapter_id.
+    """
+    try:
+        annos = [a for a in book.annotations if a.location and a.location.chapter_id]
+    except Exception as e:
+        logger.warning("book.annotations unavailable: %s", e)
+        return None
+    if not annos:
+        return None
+    annos.sort(
+        key=lambda a: getattr(a, "creation_date", None) or datetime.min,
+        reverse=True,
+    )
+    top = annos[0]
+    return top.location.chapter_id, top
+
+
+def _resolve_current_chapter(
+    api: "PyAppleBooks", book
+) -> Optional[_ChapterResolution]:
+    """Three-tier resolution of 'where is the user in this book?'.
+
+    Raises the book-wide errors (BookNotDownloadedError,
+    DRMProtectedError) — callers render those as the user-facing
+    "not available" / "DRM-protected" messages.
+
+    Returns None if no tier succeeds.
+    """
+    # Tier 1: ToC-resolved chapter.
+    chapter = api.get_current_reading_chapter(book.id)
+    if chapter is not None:
+        try:
+            content = api.get_book_content(book.id)
+            total = len(content.list_chapters())
+        except AppleBooksError as e:
+            logger.warning("chapter count unavailable: %s", e)
+            total = None
+        return _ChapterResolution(
+            chapter_id=chapter.id,
+            title=chapter.title,
+            order=chapter.order,
+            total_chapters=total,
+            source="toc",
+        )
+
+    # Tier 2: raw CFI from reading-position bookmark.
+    try:
+        bookmark = api.get_current_reading_location(book.id)
+    except AppleBooksError as e:
+        logger.warning("current reading location unavailable: %s", e)
+        bookmark = None
+
+    if (
+        bookmark is not None
+        and getattr(bookmark, "location", None)
+        and bookmark.location.chapter_id
+    ):
+        return _ChapterResolution(
+            chapter_id=bookmark.location.chapter_id,
+            title=None,
+            order=None,
+            total_chapters=None,
+            source="cfi",
+        )
+
+    # Tier 3: most-recent-highlight proxy. Only fires when Apple Books
+    # wrote a tombstone bookmark (no CFI) OR wrote no bookmark at all.
+    # Honest labeling downstream makes clear this is a proxy, not the
+    # bookmark itself.
+    proxy = _most_recent_highlight_chapter(book)
+    if proxy is not None:
+        cid, anno = proxy
+        # Enrich with a ToC title if the highlight's CFI happens to
+        # point at a ToC-known chapter (common case).
+        title = None
+        try:
+            content = api.get_book_content(book.id)
+            for c in content.list_chapters():
+                if c.id == cid:
+                    title = c.title
+                    break
+        except AppleBooksError:
+            pass
+        return _ChapterResolution(
+            chapter_id=cid,
+            title=title,
+            order=None,
+            total_chapters=None,
+            source="recent_highlight",
+        )
+
+    return None
+
+
+def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
+    """Return a compact 'you left off on…' metadata block, or '' if no
+    tier yields an answer (DRM, not downloaded, no bookmark and no
+    highlights).
+
+    Lean-by-design: emits only the chapter's title and id — never the
+    chapter text. If Claude wants the text, it calls
     ``get_chapter_content(book_id, chapter_id)`` on demand. This keeps
     the attached resource small so it doesn't dominate the context
     window.
-
-    Two-tier resolution:
-
-    1. Preferred: :meth:`PyAppleBooks.get_current_reading_chapter`
-       gives a full :class:`Chapter` entry when the CFI's chapter_id
-       matches a ToC item.
-    2. Fallback: many EPUBs store the reading-position CFI against a
-       manifest item id that the ToC doesn't list (sub-section, or a
-       re-numbered spine entry). The chapter is still fetchable via
-       :meth:`get_chapter_content` — we just don't have a human
-       title. Peek at the raw Location and emit the id alone so
-       Claude can still hand it off.
     """
-    # Tier 1: try the clean ToC-resolved chapter first.
     try:
-        chapter = api.get_current_reading_chapter(book.id)
+        resolution = _resolve_current_chapter(api, book)
     except BookNotDownloadedError:
         return (
             "\nCurrent chapter: not available — this book hasn't been "
@@ -356,40 +472,34 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
         logger.warning("current reading chapter unavailable: %s", e)
         return ""
 
-    if chapter is not None:
-        try:
-            content = api.get_book_content(book.id)
-            total_chapters = len(content.list_chapters())
-        except AppleBooksError as e:
-            logger.warning("chapter count unavailable: %s", e)
-            total_chapters = None
-
-        position = (
-            f"[{chapter.order}/{total_chapters}]" if total_chapters else f"[{chapter.order}]"
-        )
-        return (
-            f"\nCurrent chapter: {position} {chapter.title}  "
-            f'(use get_chapter_content({book.id}, "{chapter.id}") for the text)'
-        )
-
-    # Tier 2: ToC lookup yielded nothing. Peek at the raw position CFI —
-    # sub-section ids still work with get_chapter_content even when the
-    # ToC doesn't carry them.
-    try:
-        bookmark = api.get_current_reading_location(book.id)
-    except AppleBooksError as e:
-        logger.warning("current reading location unavailable: %s", e)
+    if resolution is None:
         return ""
 
-    if (
-        bookmark is not None
-        and getattr(bookmark, "location", None)
-        and bookmark.location.chapter_id
-    ):
-        cid = bookmark.location.chapter_id
-        return (
-            f"\nCurrent chapter id: {cid}  "
-            f'(use get_chapter_content({book.id}, "{cid}") for the text)'
-        )
+    call_hint = f'(use get_chapter_content({book.id}, "{resolution.chapter_id}") for the text)'
 
-    return ""
+    if resolution.source == "toc":
+        position = (
+            f"[{resolution.order}/{resolution.total_chapters}]"
+            if resolution.total_chapters
+            else f"[{resolution.order}]"
+        )
+        return f"\nCurrent chapter: {position} {resolution.title}  {call_hint}"
+
+    if resolution.source == "cfi":
+        return f"\nCurrent chapter id: {resolution.chapter_id}  {call_hint}"
+
+    # source == "recent_highlight" — proxy, not the bookmark itself.
+    # Label clearly so the caller knows the provenance.
+    label = (
+        f"(inferred from your most recent highlight — Apple Books hasn't "
+        f"recorded a CFI on the reading bookmark yet)"
+    )
+    if resolution.title:
+        return (
+            f"\nCurrent chapter: {resolution.title}  {call_hint}"
+            f"\n  {label}"
+        )
+    return (
+        f"\nCurrent chapter id: {resolution.chapter_id}  {call_hint}"
+        f"\n  {label}"
+    )
