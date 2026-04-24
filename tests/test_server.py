@@ -403,7 +403,7 @@ def test_currently_reading_resource_content(mock_apple_books):
 
 
 def test_prompts_registered():
-    """Verify all 5 prompts are exposed via MCP."""
+    """Verify the 3 curated prompts are exposed via MCP."""
     import asyncio
     from apple_books_mcp.server import mcp
 
@@ -411,8 +411,6 @@ def test_prompts_registered():
     names = {p.name for p in prompts}
     assert names == {
         "weekly_digest",
-        "explain_recent_highlight",
-        "what_am_i_reading",
         "library_snapshot",
         "revisit_book",
     }

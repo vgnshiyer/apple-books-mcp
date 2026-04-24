@@ -1049,30 +1049,6 @@ def weekly_digest(days: int = 7) -> str:
 
 
 @mcp.prompt()
-def explain_recent_highlight() -> str:
-    """Take my most recent highlight and explain what it means."""
-    return (
-        "Call `recent_annotations` with `limit=1` to get my most recent highlight. "
-        "Then explain:\n\n"
-        "1. What the passage is saying, in plain language.\n"
-        "2. Why it likely caught my attention — what's interesting about it.\n"
-        "3. How it fits into the broader argument of the book (if you know the book).\n\n"
-        "Quote the passage first, then explain. Keep it tight."
-    )
-
-
-@mcp.prompt()
-def what_am_i_reading() -> str:
-    """Quick snapshot of books I'm currently in the middle of."""
-    return (
-        "Call `get_books_in_progress` to list what I'm actively reading. For each book, "
-        "give a one-line characterization (title, author, progress, when I last opened "
-        "it). Don't just restate the data — add a sentence about what each book is "
-        "generally about if you know it. End with: \"What would you like to focus on?\""
-    )
-
-
-@mcp.prompt()
 def library_snapshot() -> str:
     """A reflection on my whole reading life — what I've read, what I'm reading, what's stuck."""
     return (
