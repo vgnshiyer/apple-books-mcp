@@ -96,8 +96,6 @@ One-click workflows, accessible from Claude Desktop's prompt picker.
 | Prompt | Description | Arguments |
 |--------|-------------|-----------|
 | weekly_digest | Summarize what I've read and highlighted in the past week | days?: int (default: 7) |
-| explain_recent_highlight | Take my most recent highlight and explain what it means | None |
-| what_am_i_reading | Quick snapshot of books I'm currently in the middle of | None |
 | library_snapshot | A reflection on my whole reading life | None |
 | revisit_book | Revisit your notes and highlights from a specific book | book_title: str |
 
