@@ -1,4 +1,5 @@
 import logging
+import os
 import re
 from datetime import datetime
 from mcp.types import (
@@ -9,7 +10,13 @@ from py_apple_books import PyAppleBooks
 from py_apple_books.exceptions import (
     AppleBooksError,
     BookNotDownloadedError,
+    BookNotFoundError,
+    BooksAppRunningError,
+    CollectionNotFoundError,
     DRMProtectedError,
+    SchemaValidationError,
+    SystemCollectionError,
+    WriteError,
 )
 
 from apple_books_mcp.utils import (
@@ -130,6 +137,210 @@ def search_collections_by_title(title: str) -> TextContent:
         return TextContent(type="text", text=f"No collections matched {title!r}.")
     lines = [_format_collection_row(c) for c in collections]
     return TextContent(type="text", text="\n".join(lines))
+
+
+# -- Collection Write Tools (opt-in) --
+#
+# Disabled unless the server was launched with --enable-writes. Every
+# write refuses while Books.app is running, takes an automatic backup
+# first (~/.py_apple_books/backups/), and only touches user-created
+# collections (plus "Want to Read" membership).
+
+_WRITES_DISABLED_MSG = (
+    "Collection editing is disabled. To enable it, add \"--enable-writes\" "
+    "to this server's args in your Claude Desktop config, e.g.\n\n"
+    '  "args": ["apple-books-mcp@latest", "--enable-writes"]\n\n'
+    "then restart Claude Desktop. Writes always refuse while Books is "
+    "open, and every change takes an automatic backup first."
+)
+
+_ICLOUD_CAVEAT = (
+    "(If iCloud sync for collections is on, the change may not propagate "
+    "to other devices.)"
+)
+
+
+def _writes_enabled() -> bool:
+    return os.environ.get("APPLE_BOOKS_MCP_ENABLE_WRITES") == "1"
+
+
+def _run_write(action) -> TextContent:
+    """Run a write callable, mapping backend errors to actionable text."""
+    try:
+        return action()
+    except BooksAppRunningError:
+        return TextContent(
+            type="text",
+            text=(
+                "Apple Books is open — writes are blocked while it runs. "
+                "Ask the user to quit Books (Cmd-Q), then try again."
+            ),
+        )
+    except SystemCollectionError as e:
+        return TextContent(type="text", text=str(e))
+    except (CollectionNotFoundError, BookNotFoundError) as e:
+        return TextContent(type="text", text=str(e))
+    except SchemaValidationError as e:
+        return TextContent(
+            type="text",
+            text=(
+                f"Write aborted for safety: {e} No changes were made."
+            ),
+        )
+    except WriteError as e:
+        return TextContent(type="text", text=f"Write failed: {e}")
+    except IndexError:
+        return TextContent(type="text", text="Book or collection not found.")
+    except AppleBooksError as e:
+        return TextContent(type="text", text=f"Could not complete the write: {e}")
+
+
+@mcp.tool()
+def create_collection(title: str, details: str = None) -> TextContent:
+    """
+    Create a new collection in the user's Apple Books library.
+    Requires write access and Books to be quit; a backup is taken
+    automatically.
+
+    Args:
+        title: Name for the new collection.
+        details: Optional description.
+    """
+    if not _writes_enabled():
+        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
+
+    def action():
+        collection = apple_books.create_collection(title, details)
+        return TextContent(
+            type="text",
+            text=(
+                f"Created collection [{collection.id}] {collection.title!r}. "
+                f"{_ICLOUD_CAVEAT}"
+            ),
+        )
+    return _run_write(action)
+
+
+@mcp.tool()
+def rename_collection(collection_id: int, new_title: str) -> TextContent:
+    """
+    Rename a user-created collection (built-in collections are
+    refused). Requires write access and Books to be quit.
+
+    Args:
+        collection_id: The collection's numeric ID.
+        new_title: The new name.
+    """
+    if not _writes_enabled():
+        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
+
+    def action():
+        collection = apple_books.rename_collection(collection_id, new_title)
+        return TextContent(
+            type="text",
+            text=(
+                f"Renamed collection [{collection.id}] to "
+                f"{collection.title!r}. {_ICLOUD_CAVEAT}"
+            ),
+        )
+    return _run_write(action)
+
+
+@mcp.tool()
+def delete_collection(collection_id: int) -> TextContent:
+    """
+    Delete a user-created collection (built-in collections are
+    refused). The books inside are NOT deleted — only the collection.
+    Requires write access and Books to be quit.
+
+    Args:
+        collection_id: The collection's numeric ID.
+    """
+    if not _writes_enabled():
+        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
+
+    def action():
+        collection = apple_books.get_collection_by_id(collection_id)
+        title = collection.title
+        apple_books.delete_collection(collection_id)
+        return TextContent(
+            type="text",
+            text=(
+                f"Deleted collection [{collection_id}] {title!r}. The books "
+                f"that were in it are untouched. {_ICLOUD_CAVEAT}"
+            ),
+        )
+    return _run_write(action)
+
+
+@mcp.tool()
+def add_book_to_collection(collection_id: int, book_id: int) -> TextContent:
+    """
+    Add a book to a collection (user-created collections and "Want to
+    Read"). Idempotent. Requires write access and Books to be quit.
+
+    Args:
+        collection_id: The collection's numeric ID.
+        book_id: The book's numeric ID.
+    """
+    if not _writes_enabled():
+        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
+
+    def action():
+        changed = apple_books.add_book_to_collection(collection_id, book_id)
+        book = apple_books.get_book_by_id(book_id)
+        collection = apple_books.get_collection_by_id(collection_id)
+        if changed:
+            return TextContent(
+                type="text",
+                text=(
+                    f"Added {book.title!r} to {collection.title!r}. "
+                    f"{_ICLOUD_CAVEAT}"
+                ),
+            )
+        return TextContent(
+            type="text",
+            text=(
+                f"{book.title!r} is already in {collection.title!r} — "
+                "nothing changed."
+            ),
+        )
+    return _run_write(action)
+
+
+@mcp.tool()
+def remove_book_from_collection(collection_id: int, book_id: int) -> TextContent:
+    """
+    Remove a book from a collection (the book stays in the library).
+    Idempotent. Requires write access and Books to be quit.
+
+    Args:
+        collection_id: The collection's numeric ID.
+        book_id: The book's numeric ID.
+    """
+    if not _writes_enabled():
+        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
+
+    def action():
+        changed = apple_books.remove_book_from_collection(collection_id, book_id)
+        book = apple_books.get_book_by_id(book_id)
+        collection = apple_books.get_collection_by_id(collection_id)
+        if changed:
+            return TextContent(
+                type="text",
+                text=(
+                    f"Removed {book.title!r} from {collection.title!r}. "
+                    f"The book is still in the library. {_ICLOUD_CAVEAT}"
+                ),
+            )
+        return TextContent(
+            type="text",
+            text=(
+                f"{book.title!r} wasn't in {collection.title!r} — "
+                "nothing changed."
+            ),
+        )
+    return _run_write(action)
 
 
 # -- Books Tools --

@@ -14,6 +14,8 @@ from apple_books_mcp.server import (
     get_annotations_by_date_range,
     get_library_stats,
     get_current_reading_position,
+    create_collection, rename_collection, delete_collection,
+    add_book_to_collection, remove_book_from_collection,
 )
 
 
@@ -123,7 +125,19 @@ def mock_apple_books():
         mock.get_annotations_by_date_range.return_value = [anno]
         mock.get_books_by_genre.return_value = [book]
 
+        # Collection write methods (v0.8.0)
+        mock.create_collection.return_value = MockCollection()
+        mock.rename_collection.return_value = MockCollection()
+        mock.delete_collection.return_value = None
+        mock.add_book_to_collection.return_value = True
+        mock.remove_book_from_collection.return_value = True
+
         yield mock
+
+
+@pytest.fixture
+def writes_enabled(monkeypatch):
+    monkeypatch.setenv("APPLE_BOOKS_MCP_ENABLE_WRITES", "1")
 
 
 def test_list_all_collections(mock_apple_books):
@@ -557,3 +571,108 @@ def test_library_stats_separates_orphan_annotations(mock_apple_books):
     assert "from books no longer in the library" in result.text
     # The valid annotation still shows up under its real book.
     assert "Book 1" in result.text
+
+
+# ---------------------------------------------------------------------------
+# v0.8.0 collection write tools
+# ---------------------------------------------------------------------------
+
+
+def test_write_tools_disabled_by_default(mock_apple_books, monkeypatch):
+    """Without --enable-writes, every write tool refuses with enable
+    instructions and never calls the backend."""
+    monkeypatch.delenv("APPLE_BOOKS_MCP_ENABLE_WRITES", raising=False)
+    for fn, args in [
+        (create_collection, ("X",)),
+        (rename_collection, (9, "Y")),
+        (delete_collection, (9,)),
+        (add_book_to_collection, (9, 1)),
+        (remove_book_from_collection, (9, 1)),
+    ]:
+        result = fn(*args)
+        assert "--enable-writes" in result.text, fn.__name__
+    mock_apple_books.create_collection.assert_not_called()
+    mock_apple_books.delete_collection.assert_not_called()
+
+
+def test_create_collection(mock_apple_books, writes_enabled):
+    result = create_collection("Philosophy")
+    assert "Created collection" in result.text
+    assert "Collection 1" in result.text
+    mock_apple_books.create_collection.assert_called_once_with("Philosophy", None)
+
+
+def test_rename_collection(mock_apple_books, writes_enabled):
+    result = rename_collection(9, "New Name")
+    assert "Renamed collection" in result.text
+    mock_apple_books.rename_collection.assert_called_once_with(9, "New Name")
+
+
+def test_delete_collection(mock_apple_books, writes_enabled):
+    result = delete_collection(9)
+    assert "Deleted collection" in result.text
+    assert "untouched" in result.text
+    mock_apple_books.delete_collection.assert_called_once_with(9)
+
+
+def test_add_book_to_collection(mock_apple_books, writes_enabled):
+    result = add_book_to_collection(9, 1)
+    assert "Added" in result.text
+    assert "Book 1" in result.text
+    mock_apple_books.add_book_to_collection.assert_called_once_with(9, 1)
+
+
+def test_add_book_already_present(mock_apple_books, writes_enabled):
+    mock_apple_books.add_book_to_collection.return_value = False
+    result = add_book_to_collection(9, 1)
+    assert "already in" in result.text
+    assert "nothing changed" in result.text.lower()
+
+
+def test_remove_book_from_collection(mock_apple_books, writes_enabled):
+    result = remove_book_from_collection(9, 1)
+    assert "Removed" in result.text
+    assert "still in the library" in result.text
+
+
+def test_remove_book_not_present(mock_apple_books, writes_enabled):
+    mock_apple_books.remove_book_from_collection.return_value = False
+    result = remove_book_from_collection(9, 1)
+    assert "wasn't in" in result.text
+
+
+def test_write_blocked_while_books_running(mock_apple_books, writes_enabled):
+    from py_apple_books.exceptions import BooksAppRunningError
+    mock_apple_books.create_collection.side_effect = BooksAppRunningError("Books is running")
+    result = create_collection("X")
+    assert "quit Books" in result.text
+
+
+def test_write_system_collection_refused(mock_apple_books, writes_enabled):
+    from py_apple_books.exceptions import SystemCollectionError
+    mock_apple_books.rename_collection.side_effect = SystemCollectionError(
+        "'Books' is not a user-created collection"
+    )
+    result = rename_collection(3, "Nope")
+    assert "not a user-created collection" in result.text
+
+
+def test_write_schema_drift_aborts_cleanly(mock_apple_books, writes_enabled):
+    from py_apple_books.exceptions import SchemaValidationError
+    mock_apple_books.create_collection.side_effect = SchemaValidationError(
+        "Table ZBKCOLLECTION is missing expected column(s)."
+    )
+    result = create_collection("X")
+    assert "aborted for safety" in result.text
+    assert "No changes were made" in result.text
+
+
+def test_write_collection_not_found(mock_apple_books, writes_enabled):
+    from py_apple_books.exceptions import CollectionNotFoundError
+    mock_apple_books.delete_collection.side_effect = CollectionNotFoundError(
+        "No collection with id 99."
+    )
+    # delete fetches the collection first; make that succeed so the
+    # writer error is what surfaces
+    result = delete_collection(99)
+    assert "No collection with id 99" in result.text
