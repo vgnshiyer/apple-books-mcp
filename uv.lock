@@ -26,7 +26,7 @@ wheels = [
 
 [[package]]
 name = "apple-books-mcp"
-version = "0.7.3"
+version = "0.8.0"
 source = { virtual = "." }
 dependencies = [
     { name = "click" },
@@ -43,7 +43,7 @@ dev = [
 requires-dist = [
     { name = "click", specifier = ">=8.1.8" },
     { name = "fastmcp", specifier = ">=0.4.1" },
-    { name = "py-apple-books", specifier = ">=1.8.0" },
+    { name = "py-apple-books", specifier = ">=1.9.0" },
 ]
 
 [package.metadata.requires-dev]
@@ -308,15 +308,15 @@ wheels = [
 
 [[package]]
 name = "py-apple-books"
-version = "1.8.0"
+version = "1.9.0"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "beautifulsoup4" },
     { name = "ebooklib" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/6e/3c/6e942d514790bf8f570cfa9e248ef6e0c233af30dd4adb8f539d74abed9f/py_apple_books-1.8.0.tar.gz", hash = "sha256:dc402f61fd351e9d33f9fc16e21c0c33e92fb6f6f21cca28b75dc7a8cf972c1f", size = 39936 }
+sdist = { url = "https://files.pythonhosted.org/packages/38/64/5c5ed598cb27b37ca2cd1b1c5b8100e24661d45df10012304d27e5210340/py_apple_books-1.9.0.tar.gz", hash = "sha256:239da5acc3784df7efdb3b7e052393e2b29fff49495f62ba61959a207b67e89d", size = 53915 }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/ed/29/9d26710b217340afef0e9f88b4a7dcbbdc2488fe9f05f36b3e1d0683f755/py_apple_books-1.8.0-py3-none-any.whl", hash = "sha256:16c1621df87e77d5ea415a8545a3016bebc9b5bc64a77f1b710c8f8ea89e068e", size = 35054 },
+    { url = "https://files.pythonhosted.org/packages/5c/85/80f6ec085ee1400260f4d752555b55fd4deee82cccf87f1c4ca4db4d4622/py_apple_books-1.9.0-py3-none-any.whl", hash = "sha256:c1b16721620db1bab51858425e2744eebf68a6ce683c11a821f34f738bd283f6", size = 45551 },
 ]
 
 [[package]]

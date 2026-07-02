@@ -33,6 +33,26 @@ And much more!
 | describe_collection | Get details of a collection | collection_id: str |
 | search_collections_by_title | Search for collections by title | title: str |
 
+### Editing collections (opt-in)
+
+Off by default. Enable by adding `--enable-writes` to the server args:
+
+```json
+"args": ["apple-books-mcp@latest", "--enable-writes"]
+```
+
+Apple provides no automation API for collections, so these write directly to the library database — behind guard rails: every write **refuses while Books is open**, takes an automatic WAL-safe backup first (`~/.py_apple_books/backups/`), validates the schema and aborts on drift, and only touches user-created collections (plus "Want to Read" membership). Deleting a collection never deletes the books in it.
+
+> ⚠️ If iCloud sync for collections is enabled, direct edits may not propagate to other devices and can be reverted by a cloud re-sync.
+
+| Tool | Description | Parameters |
+|------|-------------|------------|
+| create_collection | Create a new collection | title: str, details?: str |
+| rename_collection | Rename a user-created collection | collection_id: int, new_title: str |
+| delete_collection | Delete a user-created collection (books untouched) | collection_id: int |
+| add_book_to_collection | Add a book to a collection (idempotent) | collection_id: int, book_id: int |
+| remove_book_from_collection | Remove a book from a collection (idempotent) | collection_id: int, book_id: int |
+
 ### Books
 
 | Tool | Description | Parameters |
