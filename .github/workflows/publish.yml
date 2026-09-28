@@ -37,6 +37,13 @@ jobs:
         run: |
           uv run python -m build
 
+      - name: Smoke-test the built wheel
+        run: |
+          d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
+          mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
+          touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
+          python3 scripts/smoke_test.py uvx --from dist/*.whl apple-books-mcp
+
       - name: Publish package
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
