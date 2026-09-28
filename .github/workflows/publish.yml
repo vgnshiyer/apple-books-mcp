@@ -48,3 +48,22 @@ jobs:
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           skip-existing: true
+
+      - name: Install mcp-publisher
+        run: |
+          curl -sSL -o mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: Publish server.json to the MCP Registry
+        # The registry verifies the PyPI release, which can take a minute
+        # to become visible after upload, so retry before failing.
+        run: |
+          ./mcp-publisher login github-oidc
+          for attempt in 1 2 3 4 5 6; do
+            ./mcp-publisher publish && exit 0
+            echo "Registry publish attempt $attempt failed; retrying in 30s"
+            sleep 30
+          done
+          exit 1
