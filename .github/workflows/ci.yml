@@ -1,0 +1,48 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  schedule:
+    # Weekly, so upstream releases that break fresh installs (like mcp 2.0
+    # removing mcp.server.fastmcp) are caught even when nothing here changed.
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.11", "3.12", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Stub the Apple Books databases
+        # py-apple-books opens these at import time; empty files are valid SQLite databases.
+        run: |
+          d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
+          mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
+          touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
+      - run: uv run --frozen --python ${{ matrix.python-version }} pytest -q
+
+  smoke:
+    # Installs the built wheel the way users do (uvx, fresh resolution, no
+    # lockfile) and checks the server answers initialize + tools/list.
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        python-version: ["3.10", "3.13"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Stub the Apple Books databases
+        run: |
+          d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
+          mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
+          touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
+      - run: uv build --wheel
+      - run: python3 scripts/smoke_test.py uvx --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp
