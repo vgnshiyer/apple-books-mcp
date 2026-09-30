@@ -1,6 +1,8 @@
 import pytest
 from datetime import datetime
 from unittest.mock import patch
+from py_apple_books import LibraryStats
+from py_apple_books.models.location import Location
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
     list_all_books, describe_book,
@@ -19,12 +21,21 @@ from apple_books_mcp.server import (
 )
 
 
+class MockResults(list):
+    """A list with the ``count()`` of py-apple-books 1.10's
+    ``ModelIterable`` (a ``COUNT(*)`` there). Slicing returns a list,
+    as a ``ModelIterable`` slice does."""
+
+    def count(self):
+        return len(self)
+
+
 class MockBook:
     def __init__(self):
         self.id = "book1"
         self.title = "Book 1"
         self.author = "Author 1"
-        self.annotations = []
+        self.annotations = MockResults()
         self.reading_progress = 45.0
         self.is_finished = False
         self.last_opened_date = None
@@ -48,6 +59,11 @@ class MockLocation:
         self.cfi = cfi
         self.chapter_id = chapter_id
         self.char_range = char_range
+        # Document-order fields (py-apple-books 1.10), parsed as the
+        # library does.
+        parsed = Location(cfi)
+        self.sort_key = parsed.sort_key
+        self.spine_index = parsed.spine_index
 
     def __bool__(self):
         return bool(self.cfi)
@@ -70,6 +86,7 @@ class MockAnnotation:
         self.location = MockLocation(
             cfi="epubcfi(/6/8[chap1]!/4/2/1:0)", chapter_id="chap1"
         )
+        self.note = None
         self.creation_date = datetime(2026, 4, 16, 14, 23, 45)
         self.modification_date = datetime(2026, 4, 16, 14, 24, 0)
 
@@ -101,29 +118,36 @@ def mock_apple_books():
     with patch('apple_books_mcp.server.apple_books') as mock:
         book = MockBook()
         anno = MockAnnotation()
-        book.annotations = [anno]
+        book.annotations = MockResults([anno])
 
-        mock.list_collections.return_value = [MockCollection()]
+        # The list and search methods return ModelIterables (count() and
+        # slicing); search_annotation_by_text returns a plain list.
+        mock.list_collections.return_value = MockResults([MockCollection()])
         mock.get_collection_by_id.return_value = MockCollection()
-        mock.list_books.return_value = [book]
+        mock.list_books.return_value = MockResults([book])
         mock.get_book_by_id.return_value = book
-        mock.list_annotations.return_value = [anno]
-        mock.get_annotations_by_color.return_value = [anno]
-        mock.search_annotation_by_highlighted_text.return_value = [anno]
-        mock.search_annotation_by_note.return_value = [anno]
+        mock.list_annotations.return_value = MockResults([anno])
+        mock.get_annotations_by_color.return_value = MockResults([anno])
+        mock.search_annotation_by_highlighted_text.return_value = MockResults([anno])
+        mock.search_annotation_by_note.return_value = MockResults([anno])
         mock.search_annotation_by_text.return_value = [anno]
         mock.get_annotation_by_id.return_value = anno
         mock.get_annotation_surrounding_text.return_value = (
             "Some preceding text. Test text. Some following text."
         )
-        mock.get_book_by_title.return_value = [book]
-        mock.get_collection_by_title.return_value = [MockCollection()]
-        mock.get_books_in_progress.return_value = [book]
-        mock.get_finished_books.return_value = [book]
-        mock.get_unstarted_books.return_value = [book]
-        mock.get_recently_read_books.return_value = [book]
-        mock.get_annotations_by_date_range.return_value = [anno]
-        mock.get_books_by_genre.return_value = [book]
+        mock.get_book_by_title.return_value = MockResults([book])
+        mock.get_collection_by_title.return_value = MockResults([MockCollection()])
+        mock.get_books_in_progress.return_value = MockResults([book])
+        mock.get_finished_books.return_value = MockResults([book])
+        mock.get_unstarted_books.return_value = MockResults([book])
+        mock.get_recently_read_books.return_value = MockResults([book])
+        mock.get_annotations_by_date_range.return_value = MockResults([anno])
+        mock.get_books_by_genre.return_value = MockResults([book])
+        mock.get_library_stats.return_value = LibraryStats(
+            total_books=1, finished_books=0, in_progress_books=1,
+            unstarted_books=0, total_annotations=1, orphan_annotations=0,
+            annotations_per_book=(("book1", "Book 1", 1),),
+        )
 
         # Collection write methods (v0.8.0)
         mock.create_collection.return_value = MockCollection()
@@ -143,7 +167,8 @@ def writes_enabled(monkeypatch):
 def test_list_all_collections(mock_apple_books):
     result = list_all_collections()
     assert "Collection 1" in result.text
-    mock_apple_books.list_collections.assert_called_once_with(limit=None)
+    # The page is sliced from the query (count() + LIMIT/OFFSET).
+    mock_apple_books.list_collections.assert_called_once_with()
 
 
 def test_get_collection_books(mock_apple_books):
@@ -161,7 +186,7 @@ def test_describe_collection(mock_apple_books):
 def test_list_all_books(mock_apple_books):
     result = list_all_books()
     assert "Book 1" in result.text
-    mock_apple_books.list_books.assert_called_once_with(limit=None)
+    mock_apple_books.list_books.assert_called_once_with()
 
 
 def test_describe_book(mock_apple_books):
@@ -179,7 +204,7 @@ def test_list_all_annotations(mock_apple_books):
     # Ordering defaults to recent-first so heavily-deleted old books
     # (orphan asset_ids) don't dominate the top of the listing.
     mock_apple_books.list_annotations.assert_called_once_with(
-        limit=None, order_by="-creation_date"
+        order_by="-creation_date"
     )
 
 
@@ -198,7 +223,7 @@ def test_list_annotations_empty_for_book_with_none(mock_apple_books):
     # Book exists but has no annotations — should return a friendly
     # message instead of empty output.
     book = mock_apple_books.get_book_by_id.return_value
-    book.annotations = []
+    book.annotations = MockResults()
     result = list_annotations("book1")
     assert "No annotations" in result.text
 
@@ -212,31 +237,38 @@ def test_list_annotations_unknown_book(mock_apple_books):
 def test_get_highlights_by_color(mock_apple_books):
     result = get_highlights_by_color("yellow")
     assert "Test text" in result.text
-    mock_apple_books.get_annotations_by_color.assert_called_once_with("yellow", limit=None)
+    mock_apple_books.get_annotations_by_color.assert_called_once_with(
+        "yellow", order_by="-creation_date"
+    )
 
 
 def test_search_notes(mock_apple_books):
     result = search_notes("note")
     assert "Test text" in result.text
-    mock_apple_books.search_annotation_by_note.assert_called_once_with("note", limit=None)
+    mock_apple_books.search_annotation_by_note.assert_called_once_with(
+        "note", order_by="-creation_date"
+    )
 
 
 def test_search_annotations(mock_apple_books):
     result = search_annotations("test")
     assert "Test text" in result.text
-    mock_apple_books.search_annotation_by_text.assert_called_once_with("test", limit=None)
+    # One row past the page says whether there is a next page.
+    mock_apple_books.search_annotation_by_text.assert_called_once_with(
+        "test", limit=51, offset=0, order_by="-creation_date"
+    )
 
 
 def test_recent_annotations(mock_apple_books):
     result = recent_annotations()
     assert "Test text" in result.text
-    mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
+    mock_apple_books.list_annotations.assert_called_once_with(order_by="-creation_date")
 
 
 def test_recent_annotations_handles_missing_book(mock_apple_books):
     orphaned_annotation = MockAnnotation()
     orphaned_annotation.book = None
-    mock_apple_books.list_annotations.return_value = [orphaned_annotation]
+    mock_apple_books.list_annotations.return_value = MockResults([orphaned_annotation])
 
     result = recent_annotations()
 
@@ -244,7 +276,7 @@ def test_recent_annotations_handles_missing_book(mock_apple_books):
     # an explicit "no longer in library" suffix instead of silently
     # disappearing into an "Unknown Book" bucket.
     assert "no longer in library" in result.text
-    mock_apple_books.list_annotations.assert_called_once_with(limit=10, order_by="-creation_date")
+    mock_apple_books.list_annotations.assert_called_once_with(order_by="-creation_date")
 
 
 def test_search_books_by_title(mock_apple_books):
@@ -257,7 +289,7 @@ def test_get_books_by_genre(mock_apple_books):
     result = get_books_by_genre("Romance")
     assert "Book 1" in result.text
     assert "Romance" in result.text
-    mock_apple_books.get_books_by_genre.assert_called_once_with("Romance", limit=None)
+    mock_apple_books.get_books_by_genre.assert_called_once_with("Romance")
 
 
 def test_search_collections_by_title(mock_apple_books):
@@ -270,37 +302,49 @@ def test_get_books_in_progress(mock_apple_books):
     result = get_books_in_progress()
     assert "Book 1" in result.text
     assert "In Progress" in result.text
-    mock_apple_books.get_books_in_progress.assert_called_once_with(limit=None)
+    mock_apple_books.get_books_in_progress.assert_called_once_with()
 
 
 def test_get_finished_books(mock_apple_books):
     result = get_finished_books()
     assert "Book 1" in result.text
     assert "Author 1" in result.text
-    mock_apple_books.get_finished_books.assert_called_once_with(limit=None)
+    mock_apple_books.get_finished_books.assert_called_once_with()
 
 
 def test_get_unstarted_books(mock_apple_books):
     result = get_unstarted_books()
     assert "Book 1" in result.text
-    mock_apple_books.get_unstarted_books.assert_called_once_with(limit=None)
+    mock_apple_books.get_unstarted_books.assert_called_once_with()
 
 
 def test_get_recently_read_books(mock_apple_books):
     result = get_recently_read_books()
     assert "Book 1" in result.text
-    mock_apple_books.get_recently_read_books.assert_called_once_with(limit=10)
+    # Sorted in Python by the library; the page is sliced from all rows.
+    mock_apple_books.get_recently_read_books.assert_called_once_with(limit=None)
 
 
 def test_limit_parameter(mock_apple_books):
-    list_all_books(limit=5)
-    mock_apple_books.list_books.assert_called_once_with(limit=5)
+    books = []
+    for i in range(8):
+        book = MockBook()
+        book.id = f"book{i}"
+        books.append(book)
+    mock_apple_books.list_books.return_value = MockResults(books)
+    mock_apple_books.get_books_in_progress.return_value = MockResults(books)
+
+    result = list_all_books(limit=5)
+    assert "[book4]" in result.text and "[book5]" not in result.text
+    assert "Showing 1–5 of 8 books. Next page: offset=5." in result.text
+
+    result = get_books_in_progress(limit=2, offset=6)
+    assert "[book6]" in result.text and "[book7]" in result.text
+    assert "[book5]" not in result.text
+    assert "Showing 7–8 of 8 books (end)." in result.text
 
     recent_annotations(limit=3)
-    mock_apple_books.list_annotations.assert_called_with(limit=3, order_by="-creation_date")
-
-    get_books_in_progress(limit=2)
-    mock_apple_books.get_books_in_progress.assert_called_with(limit=2)
+    mock_apple_books.list_annotations.assert_called_with(order_by="-creation_date")
 
 
 def test_annotation_lean_row_prefers_selected_text(mock_apple_books):
@@ -311,7 +355,7 @@ def test_annotation_lean_row_prefers_selected_text(mock_apple_books):
     anno = MockAnnotation()
     anno.selected_text = "minus one"
     anno.representative_text = "A caret acts like a minus one in git revision syntax."
-    mock_apple_books.list_annotations.return_value = [anno]
+    mock_apple_books.list_annotations.return_value = MockResults([anno])
 
     result = recent_annotations()
     # Lean output shows the highlight the user actually selected.
@@ -322,27 +366,29 @@ def test_annotation_lean_row_prefers_selected_text(mock_apple_books):
 
 
 def test_annotation_output_includes_date(mock_apple_books):
-    """The flat-with-timestamp format leads each row with YYYY-MM-DD so
-    Claude can cluster annotations into reading sessions."""
+    """The flat-with-timestamp format leads each row with YYYY-MM-DD HH:MM
+    (local time) so Claude can cluster annotations into reading
+    sessions."""
     result = recent_annotations()
-    assert "2026-04-16" in result.text
+    assert result.text.startswith("2026-04-16 14:23 [anno1]")
 
 
 def test_get_annotations_by_date_range(mock_apple_books):
-    from datetime import datetime
     result = get_annotations_by_date_range(after="2025-01-01", before="2025-12-31")
     assert "Test text" in result.text
+    # A date-only ``before`` covers that whole day; newest first.
     mock_apple_books.get_annotations_by_date_range.assert_called_once_with(
-        after=datetime(2025, 1, 1), before=datetime(2025, 12, 31), limit=None
+        after=datetime(2025, 1, 1),
+        before=datetime(2025, 12, 31, 23, 59, 59, 999999),
+        order_by="-creation_date",
     )
 
 
 def test_get_annotations_by_date_range_after_only(mock_apple_books):
-    from datetime import datetime
     result = get_annotations_by_date_range(after="2025-06-01")
     assert "Test text" in result.text
     mock_apple_books.get_annotations_by_date_range.assert_called_once_with(
-        after=datetime(2025, 6, 1), before=None, limit=None
+        after=datetime(2025, 6, 1), before=None, order_by="-creation_date"
     )
 
 
@@ -435,9 +481,11 @@ def test_get_library_stats(mock_apple_books):
     assert "Total books: 1" in result.text
     assert "Total annotations: 1" in result.text
     assert "Most annotated books:" in result.text
-    assert "Book 1" in result.text
-    mock_apple_books.list_books.assert_called_once()
-    mock_apple_books.list_annotations.assert_called_once()
+    assert "[book1] Book 1: 1" in result.text
+    # Counted by the library in SQL; no book or annotation is loaded.
+    mock_apple_books.get_library_stats.assert_called_once_with()
+    mock_apple_books.list_books.assert_not_called()
+    mock_apple_books.list_annotations.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +598,7 @@ def test_get_current_reading_position_truly_truly_absent(mock_apple_books):
     mock_apple_books.get_current_reading_chapter.return_value = None
     mock_apple_books.get_current_reading_location.return_value = None
     book = mock_apple_books.get_book_by_id.return_value
-    book.annotations = []
+    book.annotations = MockResults()
     result = get_current_reading_position(999)
     assert "No reading position and no highlights yet" in result.text
 
@@ -559,10 +607,11 @@ def test_library_stats_separates_orphan_annotations(mock_apple_books):
     """v0.7.1: orphan annotations (book no longer in library) are
     counted separately instead of clustering under 'Unknown Book' in
     the 'most annotated' list."""
-    orphan = MockAnnotation()
-    orphan.book = None
-    valid = MockAnnotation()
-    mock_apple_books.list_annotations.return_value = [orphan, valid]
+    mock_apple_books.get_library_stats.return_value = LibraryStats(
+        total_books=1, finished_books=0, in_progress_books=1,
+        unstarted_books=0, total_annotations=2, orphan_annotations=1,
+        annotations_per_book=(("book1", "Book 1", 1),),
+    )
 
     result = get_library_stats()
     # 'Unknown Book' should NOT appear in the top list anymore.

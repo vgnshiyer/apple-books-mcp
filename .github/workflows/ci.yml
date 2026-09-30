@@ -16,7 +16,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.11", "3.12", "3.13"]
+        python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -26,6 +26,8 @@ jobs:
           d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
           mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
           touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
+      # The dev install (uv sync) provides the console script.
+      - run: uv run --frozen --python ${{ matrix.python-version }} apple-books-mcp --version
       - run: uv run --frozen --python ${{ matrix.python-version }} pytest -q
 
   smoke:
@@ -35,7 +37,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        python-version: ["3.10", "3.13"]
+        python-version: ["3.10", "3.13", "3.14"]
     steps:
       - uses: actions/checkout@v4
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
@@ -44,5 +46,7 @@ jobs:
           d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
           mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
           touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
-      - run: uv build --wheel
+      # Like the release build: sdist first, then the wheel from the sdist.
+      - run: uv build
+      - run: uvx --refresh --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp --version
       - run: python3 scripts/smoke_test.py uvx --refresh --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp
