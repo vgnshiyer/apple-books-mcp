@@ -82,6 +82,7 @@ def main(verbose: int, enable_writes: bool) -> None:
 
     # Imported here so --help and --version work even when the server
     # can't be imported (e.g. an incompatible mcp release).
+    from apple_books_mcp import _cancel_guard
     from apple_books_mcp.server import mcp, serve
 
     _configure_logging(verbose)
@@ -94,6 +95,7 @@ def main(verbose: int, enable_writes: bool) -> None:
 
     # Without this, serverInfo.version reports the mcp SDK's version.
     mcp._mcp_server.version = __version__
+    _cancel_guard.install()
     serve()
 
 
