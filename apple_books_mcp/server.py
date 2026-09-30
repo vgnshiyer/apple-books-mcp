@@ -38,10 +38,16 @@ logger = logging.getLogger("apple-books-mcp")
 mcp = FastMCP("apple-books")
 apple_books = PyAppleBooks()
 
+# Tools return TextContent without a ``-> TextContent`` annotation: from
+# mcp 1.10 on, FastMCP turns a return annotation into an outputSchema
+# and repeats every result as structuredContent, roughly doubling what
+# the client receives. Unannotated, each call is one text block on
+# every mcp 1.x.
+
 
 # -- Collections Tools --
 @mcp.tool()
-def list_all_collections(limit: int = None) -> TextContent:
+def list_all_collections(limit: int = None):
     """
     List all collections in my Apple Books library. Output is one row
     per collection: ``[id] title``. Use ``describe_collection(id)`` for
@@ -58,7 +64,7 @@ def list_all_collections(limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def get_collection_books(collection_id: str) -> TextContent:
+def get_collection_books(collection_id: str):
     """
     List the books in a collection as lean rows: ``[id] title by
     author``. Descriptions are intentionally omitted — collections
@@ -85,7 +91,7 @@ def get_collection_books(collection_id: str) -> TextContent:
 
 
 @mcp.tool()
-def describe_collection(collection_id: str) -> TextContent:
+def describe_collection(collection_id: str):
     """
     Describe a specific collection in detail — title, details text,
     and the books contained in it.
@@ -124,7 +130,7 @@ def describe_collection(collection_id: str) -> TextContent:
 
 
 @mcp.tool()
-def search_collections_by_title(title: str) -> TextContent:
+def search_collections_by_title(title: str):
     """
     Search for collections by title (substring match). Output is one
     row per match: ``[id] title``.
@@ -196,7 +202,7 @@ def _run_write(action) -> TextContent:
 
 
 @mcp.tool()
-def create_collection(title: str, details: str = None) -> TextContent:
+def create_collection(title: str, details: str = None):
     """
     Create a new collection in the user's Apple Books library.
     Requires write access and Books to be quit; a backup is taken
@@ -222,7 +228,7 @@ def create_collection(title: str, details: str = None) -> TextContent:
 
 
 @mcp.tool()
-def rename_collection(collection_id: int, new_title: str) -> TextContent:
+def rename_collection(collection_id: int, new_title: str):
     """
     Rename a user-created collection (built-in collections are
     refused). Requires write access and Books to be quit.
@@ -247,7 +253,7 @@ def rename_collection(collection_id: int, new_title: str) -> TextContent:
 
 
 @mcp.tool()
-def delete_collection(collection_id: int) -> TextContent:
+def delete_collection(collection_id: int):
     """
     Delete a user-created collection (built-in collections are
     refused). The books inside are NOT deleted — only the collection.
@@ -274,7 +280,7 @@ def delete_collection(collection_id: int) -> TextContent:
 
 
 @mcp.tool()
-def add_book_to_collection(collection_id: int, book_id: int) -> TextContent:
+def add_book_to_collection(collection_id: int, book_id: int):
     """
     Add a book to a collection (user-created collections and "Want to
     Read"). Idempotent. Requires write access and Books to be quit.
@@ -309,7 +315,7 @@ def add_book_to_collection(collection_id: int, book_id: int) -> TextContent:
 
 
 @mcp.tool()
-def remove_book_from_collection(collection_id: int, book_id: int) -> TextContent:
+def remove_book_from_collection(collection_id: int, book_id: int):
     """
     Remove a book from a collection (the book stays in the library).
     Idempotent. Requires write access and Books to be quit.
@@ -345,7 +351,7 @@ def remove_book_from_collection(collection_id: int, book_id: int) -> TextContent
 
 # -- Books Tools --
 @mcp.tool()
-def list_all_books(limit: int = None) -> TextContent:
+def list_all_books(limit: int = None):
     """
     List all books in my Apple Books library. Output is one row per
     book: ``[id] title by author``. Use ``describe_book(id)`` for
@@ -362,7 +368,7 @@ def list_all_books(limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def describe_book(book_id: str) -> TextContent:
+def describe_book(book_id: str):
     """
     Describe a specific book in detail — metadata (title, author, genre,
     page count), reading status (progress, last opened, finished date),
@@ -421,7 +427,7 @@ def describe_book(book_id: str) -> TextContent:
 
 
 @mcp.tool()
-def search_books_by_title(title: str) -> TextContent:
+def search_books_by_title(title: str):
     """
     Search for books by title (substring match). Output is one row per
     match: ``[id] title by author``. Use ``describe_book(id)`` for
@@ -438,7 +444,7 @@ def search_books_by_title(title: str) -> TextContent:
 
 
 @mcp.tool()
-def get_books_by_genre(genre: str, limit: int = None) -> TextContent:
+def get_books_by_genre(genre: str, limit: int = None):
     """
     Get books whose genre matches the given string (substring match).
     Output is one row per match: ``[id] title by author (genre)``.
@@ -463,7 +469,7 @@ def get_books_by_genre(genre: str, limit: int = None) -> TextContent:
 # hand off to describe_book, list_annotations, or
 # get_current_reading_position without a second lookup.
 @mcp.tool()
-def get_books_in_progress(limit: int = None) -> TextContent:
+def get_books_in_progress(limit: int = None):
     """
     Get books currently being read (progress > 0% and < 100%). Output
     per row: ``[id] title by author`` with a progress summary below.
@@ -481,7 +487,7 @@ def get_books_in_progress(limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def get_finished_books(limit: int = None) -> TextContent:
+def get_finished_books(limit: int = None):
     """
     Get books that have been finished. Output per row: ``[id] title
     by author`` with a progress summary below.
@@ -499,7 +505,7 @@ def get_finished_books(limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def get_unstarted_books(limit: int = None) -> TextContent:
+def get_unstarted_books(limit: int = None):
     """
     Get books that haven't been started yet (0% progress). Output per
     row: ``[id] title by author`` with a progress summary below.
@@ -517,7 +523,7 @@ def get_unstarted_books(limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def get_recently_read_books(limit: int = 10) -> TextContent:
+def get_recently_read_books(limit: int = 10):
     """
     Get most recently opened books, ordered by last opened date.
     Output per row: ``[id] title by author`` with a progress summary
@@ -537,7 +543,7 @@ def get_recently_read_books(limit: int = 10) -> TextContent:
 
 # -- Annotations Tools --
 @mcp.tool()
-def list_all_annotations(limit: int = None) -> TextContent:
+def list_all_annotations(limit: int = None):
     """
     Browse all annotations grouped by book, most recent first. Rows:
     ``[annotation_id] <text> — <chapter title> (ch=<id>)``. Pass
@@ -593,7 +599,7 @@ def list_all_annotations(limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def list_annotations(book_id: int, limit: int = None) -> TextContent:
+def list_annotations(book_id: int, limit: int = None):
     """
     List annotations within a specific book, ordered by chapter
     position in the book (reading order). Rows are lean —
@@ -637,7 +643,7 @@ def list_annotations(book_id: int, limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def get_highlights_by_color(color: str, limit: int = None) -> TextContent:
+def get_highlights_by_color(color: str, limit: int = None):
     """
     Browse highlights of a particular color, grouped by book.
 
@@ -667,7 +673,7 @@ def get_highlights_by_color(color: str, limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def search_notes(note: str, limit: int = None) -> TextContent:
+def search_notes(note: str, limit: int = None):
     """
     Search user notes (not highlights) by substring, grouped by book.
     Output shows the highlighted passage on the primary row and the
@@ -690,7 +696,7 @@ def search_notes(note: str, limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def search_annotations(text: str, limit: int = None) -> TextContent:
+def search_annotations(text: str, limit: int = None):
     """
     Search across every annotation field — selected (highlighted) text,
     the surrounding paragraph, and the user's note body. Grouped by
@@ -711,7 +717,7 @@ def search_annotations(text: str, limit: int = None) -> TextContent:
 
 
 @mcp.tool()
-def recent_annotations(limit: int = 10) -> TextContent:
+def recent_annotations(limit: int = 10):
     """
     Most recent annotations, newest first. Flat rows with the creation
     date and book name inline so Claude can see chronology across
@@ -734,7 +740,7 @@ def recent_annotations(limit: int = 10) -> TextContent:
 
 
 @mcp.tool()
-def describe_annotation(annotation_id: str) -> TextContent:
+def describe_annotation(annotation_id: str):
     """
     Describe a specific annotation in detail — text, note, book,
     chapter, color, creation date. For the passage around the
@@ -804,7 +810,7 @@ def get_annotation_context(
     annotation_id: int,
     chars_before: int = 500,
     chars_after: int = 500,
-) -> TextContent:
+):
     """
     Return the passage around a specific highlight — the text before
     and after, with the highlight itself wrapped in ``«...»``. Use
@@ -879,7 +885,7 @@ def get_annotation_context(
 
 
 @mcp.tool()
-def get_annotations_by_date_range(after: str = None, before: str = None, limit: int = None) -> TextContent:
+def get_annotations_by_date_range(after: str = None, before: str = None, limit: int = None):
     """
     Annotations created within a date range. Flat rows with the
     creation date and book name inline.
@@ -911,7 +917,7 @@ def get_annotations_by_date_range(after: str = None, before: str = None, limit: 
 
 # -- Content Tools --
 @mcp.tool()
-def list_book_chapters(book_id: int) -> TextContent:
+def list_book_chapters(book_id: int):
     """
     List the table of contents for a book — chapter titles, order, and
     nesting depth. Only works for non-DRM EPUBs that have been downloaded
@@ -954,7 +960,7 @@ def get_chapter_content(
     chapter_id: str,
     offset: int = 0,
     max_chars: int = 10000,
-) -> TextContent:
+):
     """
     Return the plain-text content of a chapter, paginated by default
     to protect the context window. Get ``chapter_id`` from
@@ -1050,7 +1056,7 @@ def get_chapter_content(
 
 
 @mcp.tool()
-def get_current_reading_position(book_id: int) -> TextContent:
+def get_current_reading_position(book_id: int):
     """
     Return where the user last left off reading a book — chapter
     title and chapter_id, no text. Follow up with
@@ -1135,7 +1141,7 @@ def get_current_reading_position(book_id: int) -> TextContent:
 
 # -- Library Stats Tools --
 @mcp.tool()
-def get_library_stats() -> TextContent:
+def get_library_stats():
     """Get a summary of your Apple Books library with reading stats."""
     books = list(apple_books.list_books())
     annotations = list(apple_books.list_annotations())
