@@ -1,7 +1,7 @@
 import logging
 import os
 import re
-from datetime import datetime
+from datetime import date, timedelta
 from mcp.types import (
     TextContent
 )
@@ -20,8 +20,11 @@ from py_apple_books.exceptions import (
 )
 
 from apple_books_mcp.utils import (
+    _ANNOTATION_PAGE,
+    _BOOK_PAGE,
     _build_current_reading_section,
     _chapter_title_map,
+    _date_range_label,
     _format_book_row,
     _format_book_with_progress,
     _format_collection_row,
@@ -29,7 +32,15 @@ from apple_books_mcp.utils import (
     _format_grouped_by_book,
     _format_note_row,
     _get_book_title,
+    _list_page,
+    _local_zone_label,
+    _order_by,
+    _page_args,
+    _parse_date_arg,
+    _probe_page,
+    _query_page,
     _reading_order_key,
+    _render_page,
     _resolve_current_chapter,
 )
 
@@ -44,23 +55,45 @@ apple_books = PyAppleBooks()
 # the client receives. Unannotated, each call is one text block on
 # every mcp 1.x.
 
+# get_chapter_content returns at most this many characters per call,
+# and get_annotation_context at most this many on each side.
+_MAX_CHAPTER_CHARS = 50_000
+_MAX_CONTEXT_CHARS = 5_000
+
+
+def _bad_order(order_by) -> TextContent:
+    return TextContent(
+        type="text",
+        text=f"order_by must be 'newest' or 'oldest', not {order_by!r}.",
+    )
+
+
+def _books_with_progress(books) -> str:
+    return "\n".join(_format_book_with_progress(b) for b in books)
+
 
 # -- Collections Tools --
 @mcp.tool()
-def list_all_collections(limit: int = None):
+def list_all_collections(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     List all collections in my Apple Books library. Output is one row
     per collection: ``[id] title``. Use ``describe_collection(id)`` for
     details or ``get_collection_books(id)`` to list its books.
 
     Args:
-        limit: Maximum number of collections to return.
+        limit: Max collections to return (1–500, default 200).
+        offset: Collections to skip, for paging.
     """
-    collections = list(apple_books.list_collections(limit=limit))
-    if not collections:
-        return TextContent(type="text", text="No collections in library.")
-    lines = [_format_collection_row(c) for c in collections]
-    return TextContent(type="text", text="\n".join(lines))
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.list_collections(), args.limit, args.offset)
+    text = _render_page(
+        page,
+        lambda collections: "\n".join(_format_collection_row(c) for c in collections),
+        noun="collections",
+        empty_message="No collections in library.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
@@ -351,20 +384,27 @@ def remove_book_from_collection(collection_id: int, book_id: int):
 
 # -- Books Tools --
 @mcp.tool()
-def list_all_books(limit: int = None):
+def list_all_books(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     List all books in my Apple Books library. Output is one row per
     book: ``[id] title by author``. Use ``describe_book(id)`` for
     details on any book.
 
     Args:
-        limit: Maximum number of books to return.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging; a footer names the next
+            offset when there are more.
     """
-    books = list(apple_books.list_books(limit=limit))
-    if not books:
-        return TextContent(type="text", text="No books in library.")
-    lines = [_format_book_row(b) for b in books]
-    return TextContent(type="text", text="\n".join(lines))
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.list_books(), args.limit, args.offset)
+    text = _render_page(
+        page,
+        lambda books: "\n".join(_format_book_row(b) for b in books),
+        noun="books",
+        empty_message="No books in library.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
@@ -445,23 +485,29 @@ def search_books_by_title(title: str):
 
 
 @mcp.tool()
-def get_books_by_genre(genre: str, limit: int = None):
+def get_books_by_genre(genre: str, limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books whose genre matches the given string (substring match).
     Output is one row per match: ``[id] title by author (genre)``.
 
     Args:
         genre: The genre to search for (e.g. "Romance", "Philosophy").
-        limit: Maximum number of books to return.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging.
     """
-    books = list(apple_books.get_books_by_genre(genre, limit=limit))
-    if not books:
-        return TextContent(type="text", text=f"No books matched genre {genre!r}.")
-    lines = [
-        f"{_format_book_row(b)} ({getattr(b, 'genre', None) or '?'})"
-        for b in books
-    ]
-    return TextContent(type="text", text="\n".join(lines))
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.get_books_by_genre(genre), args.limit, args.offset)
+    text = _render_page(
+        page,
+        lambda books: "\n".join(
+            f"{_format_book_row(b)} ({getattr(b, 'genre', None) or '?'})"
+            for b in books
+        ),
+        noun="books",
+        empty_message=f"No books matched genre {genre!r}.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 # -- Reading Status Tools --
@@ -470,81 +516,99 @@ def get_books_by_genre(genre: str, limit: int = None):
 # hand off to describe_book, list_annotations, or
 # get_current_reading_position without a second lookup.
 @mcp.tool()
-def get_books_in_progress(limit: int = None):
+def get_books_in_progress(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books currently being read (progress > 0% and < 100%). Output
     per row: ``[id] title by author`` with a progress summary below.
 
     Args:
-        limit: Maximum number of books to return.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging.
     """
-    books = list(apple_books.get_books_in_progress(limit=limit))
-    if not books:
-        return TextContent(type="text", text="No books in progress.")
-    return TextContent(
-        type="text",
-        text="\n".join(_format_book_with_progress(b) for b in books),
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.get_books_in_progress(), args.limit, args.offset)
+    text = _render_page(
+        page,
+        _books_with_progress,
+        noun="books",
+        empty_message="No books in progress.",
+        notes=args.notes,
     )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def get_finished_books(limit: int = None):
+def get_finished_books(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books that have been finished. Output per row: ``[id] title
     by author`` with a progress summary below.
 
     Args:
-        limit: Maximum number of books to return.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging.
     """
-    books = list(apple_books.get_finished_books(limit=limit))
-    if not books:
-        return TextContent(type="text", text="No finished books yet.")
-    return TextContent(
-        type="text",
-        text="\n".join(_format_book_with_progress(b) for b in books),
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.get_finished_books(), args.limit, args.offset)
+    text = _render_page(
+        page,
+        _books_with_progress,
+        noun="books",
+        empty_message="No finished books yet.",
+        notes=args.notes,
     )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def get_unstarted_books(limit: int = None):
+def get_unstarted_books(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books that haven't been started yet (0% progress). Output per
     row: ``[id] title by author`` with a progress summary below.
 
     Args:
-        limit: Maximum number of books to return.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging.
     """
-    books = list(apple_books.get_unstarted_books(limit=limit))
-    if not books:
-        return TextContent(type="text", text="No unstarted books.")
-    return TextContent(
-        type="text",
-        text="\n".join(_format_book_with_progress(b) for b in books),
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.get_unstarted_books(), args.limit, args.offset)
+    text = _render_page(
+        page,
+        _books_with_progress,
+        noun="books",
+        empty_message="No unstarted books.",
+        notes=args.notes,
     )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def get_recently_read_books(limit: int = 10):
+def get_recently_read_books(limit: int = 10, offset: int = 0):
     """
     Get most recently opened books, ordered by last opened date.
     Output per row: ``[id] title by author`` with a progress summary
     below.
 
     Args:
-        limit: Maximum number of books to return. Defaults to 10.
+        limit: Max books to return (1–500, default 10).
+        offset: Books to skip, for paging.
     """
-    books = list(apple_books.get_recently_read_books(limit=limit))
-    if not books:
-        return TextContent(type="text", text="No recently-read books.")
-    return TextContent(
-        type="text",
-        text="\n".join(_format_book_with_progress(b) for b in books),
+    args = _page_args(limit, offset, default=10)
+    page = _query_page(
+        apple_books.get_recently_read_books(limit=None), args.limit, args.offset
     )
+    text = _render_page(
+        page,
+        _books_with_progress,
+        noun="books",
+        empty_message="No recently-read books.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 # -- Annotations Tools --
 @mcp.tool()
-def list_all_annotations(limit: int = None):
+def list_all_annotations(limit: int = _ANNOTATION_PAGE, offset: int = 0):
     """
     Browse all annotations grouped by book, most recent first. Rows:
     ``[annotation_id] <text> — <chapter title> (ch=<id>)``, with the
@@ -554,54 +618,39 @@ def list_all_annotations(limit: int = None):
     around a specific highlight.
 
     Args:
-        limit: Max annotations to return. Unlimited by default — can
-            be very long on heavily-annotated libraries.
+        limit: Max annotations to return (1–500, default 50).
+        offset: Annotations to skip, for paging; a footer names the
+            next offset when there are more.
     """
+    args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
     # Default to newest-first — old annotations are often from books
     # the user has since removed from their library (orphan rows), and
     # the library's DB stores in Z_PK order, so the oldest entries
     # surface first. Sorting by creation date descending puts current
     # reading activity at the top of the output.
-    annotations = list(
-        apple_books.list_annotations(limit=limit, order_by="-creation_date")
+    page = _query_page(
+        apple_books.list_annotations(order_by="-creation_date"), args.limit, args.offset
     )
-    if not annotations:
-        return TextContent(type="text", text="No annotations.")
-
-    # Group by book. Orphans (asset_id → no book in the library) get a
-    # dedicated tail section.
-    from collections import defaultdict
-    by_book: dict = defaultdict(list)
-    orphans: list = []
-    for anno in annotations:
-        book = getattr(anno, "book", None)
-        if book is None:
-            orphans.append(anno)
-        else:
-            by_book[book.id].append((anno, book))
-
-    # Resolve chapter titles per book exactly once.
-    chapter_maps = {book_id: _chapter_title_map(apple_books, book_id) for book_id in by_book}
-
-    lines: list = []
-    for book_id, pairs in by_book.items():
-        book = pairs[0][1]
-        author = getattr(book, "author", None) or "Unknown Author"
-        lines.append(f"\n{book.title} ({author}):")
-        ch_map = chapter_maps[book_id]
-        for anno, _ in pairs:
-            lines.append(f"  {_format_note_row(anno, ch_map)}")
-
-    if orphans:
-        lines.append("\nUnassigned (book no longer in library):")
-        for anno in orphans:
-            lines.append(f"  {_format_note_row(anno, {})}")
-
-    return TextContent(type="text", text="\n".join(lines).lstrip())
+    # Grouped by book; orphans (asset_id → no book in the library) get
+    # a dedicated tail section. Chapter titles resolve once per book.
+    chapter_maps: dict = {}
+    text = _render_page(
+        page,
+        lambda annotations: _format_grouped_by_book(
+            apple_books,
+            annotations,
+            row_formatter=_format_note_row,
+            chapter_maps=chapter_maps,
+        ),
+        noun="annotations",
+        empty_message="No annotations.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def list_annotations(book_id: int, limit: int = None):
+def list_annotations(book_id: int, limit: int = _ANNOTATION_PAGE, offset: int = 0):
     """
     List annotations within a specific book in reading order (their
     position in the book). Rows are lean —
@@ -610,7 +659,9 @@ def list_annotations(book_id: int, limit: int = None):
 
     Args:
         book_id: The book's numeric ID.
-        limit: Max annotations to return.
+        limit: Max annotations to return (1–500, default 50).
+        offset: Annotations to skip, for paging; a footer names the
+            next offset when there are more.
     """
     try:
         book = apple_books.get_book_by_id(book_id)
@@ -619,34 +670,55 @@ def list_annotations(book_id: int, limit: int = None):
 
     # Reading order comes from each annotation's CFI, so it needs no
     # ToC (and works for books that can't be opened); the ToC is only
-    # read for chapter titles. The limit is applied after sorting.
+    # read for chapter titles. The page is cut after sorting.
     annotations = sorted(book.annotations, key=_reading_order_key)
     if not annotations:
         return TextContent(
             type="text", text=f"No annotations in '{book.title}'."
         )
-    if limit:
-        annotations = annotations[:limit]
 
-    ch_map = _chapter_title_map(apple_books, book.id)
-    lines = [_format_note_row(a, ch_map) for a in annotations]
-    return TextContent(type="text", text="\n".join(lines))
+    args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
+    page = _list_page(annotations, args.limit, args.offset)
+    ch_map = _chapter_title_map(apple_books, book.id) if page.items else {}
+    text = _render_page(
+        page,
+        lambda annos: "\n".join(_format_note_row(a, ch_map) for a in annos),
+        noun="annotations",
+        empty_message=f"No annotations in '{book.title}'.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def get_highlights_by_color(color: str, limit: int = None):
+def get_highlights_by_color(
+    color: str,
+    limit: int = _ANNOTATION_PAGE,
+    offset: int = 0,
+    order_by: str = "newest",
+):
     """
     Browse highlights of a particular color, grouped by book.
 
     Output is one row per highlight: ``[id] text — chapter``. The
     book's name is shown once in the header, with a count of matching
-    highlights.
+    highlights on this page.
 
     Args:
         color: ``yellow``, ``green``, ``blue``, ``pink``, or ``purple``.
-        limit: Maximum number of annotations to return.
+        limit: Max annotations to return (1–500, default 50).
+        offset: Annotations to skip, for paging.
+        order_by: ``newest`` (default) or ``oldest`` first.
     """
-    annotations = apple_books.get_annotations_by_color(color, limit=limit)
+    order = _order_by(order_by)
+    if order is None:
+        return _bad_order(order_by)
+    args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
+    page = _query_page(
+        apple_books.get_annotations_by_color(color, order_by=order),
+        args.limit,
+        args.offset,
+    )
 
     def color_header(book, annos):
         author = getattr(book, "author", None) or "Unknown Author"
@@ -654,17 +726,29 @@ def get_highlights_by_color(color: str, limit: int = None):
         plural = "" if count == 1 else "s"
         return f"{book.title} ({author}) — {count} {color.lower()} highlight{plural}:"
 
-    text = _format_grouped_by_book(
-        apple_books,
-        annotations,
+    chapter_maps: dict = {}
+    text = _render_page(
+        page,
+        lambda annotations: _format_grouped_by_book(
+            apple_books,
+            annotations,
+            book_header=color_header,
+            chapter_maps=chapter_maps,
+        ),
+        noun=f"{color.lower()} highlights",
         empty_message=f"No {color} highlights.",
-        book_header=color_header,
+        notes=args.notes,
     )
     return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def search_notes(note: str, limit: int = None):
+def search_notes(
+    note: str,
+    limit: int = _ANNOTATION_PAGE,
+    offset: int = 0,
+    order_by: str = "newest",
+):
     """
     Search user notes (not highlights) by substring, grouped by book.
     Output shows the highlighted passage on the primary row and the
@@ -672,22 +756,42 @@ def search_notes(note: str, limit: int = None):
 
     Args:
         note: Substring to find inside note bodies.
-        limit: Maximum number of annotations to return.
+        limit: Max annotations to return (1–500, default 50).
+        offset: Annotations to skip, for paging.
+        order_by: ``newest`` (default) or ``oldest`` first.
     """
-    annotations = apple_books.search_annotation_by_note(note, limit=limit)
-    return TextContent(
-        type="text",
-        text=_format_grouped_by_book(
+    order = _order_by(order_by)
+    if order is None:
+        return _bad_order(order_by)
+    args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
+    page = _query_page(
+        apple_books.search_annotation_by_note(note, order_by=order),
+        args.limit,
+        args.offset,
+    )
+    chapter_maps: dict = {}
+    text = _render_page(
+        page,
+        lambda annotations: _format_grouped_by_book(
             apple_books,
             annotations,
-            empty_message=f"No notes matched {note!r}.",
             row_formatter=_format_note_row,
+            chapter_maps=chapter_maps,
         ),
+        noun="matching notes",
+        empty_message=f"No notes matched {note!r}.",
+        notes=args.notes,
     )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
-def search_annotations(text: str, limit: int = None):
+def search_annotations(
+    text: str,
+    limit: int = _ANNOTATION_PAGE,
+    offset: int = 0,
+    order_by: str = "newest",
+):
     """
     Search across every annotation field — selected (highlighted) text,
     the surrounding paragraph, and the user's note body. Grouped by
@@ -696,38 +800,66 @@ def search_annotations(text: str, limit: int = None):
 
     Args:
         text: Substring to match anywhere in an annotation.
-        limit: Maximum number of annotations to return.
+        limit: Max annotations to return (1–500, default 50).
+        offset: Annotations to skip, for paging.
+        order_by: ``newest`` (default) or ``oldest`` first.
     """
-    annotations = apple_books.search_annotation_by_text(text, limit=limit)
-    return TextContent(
-        type="text",
-        text=_format_grouped_by_book(
-            apple_books, annotations, empty_message=f"No annotations matched {text!r}."
+    order = _order_by(order_by)
+    if order is None:
+        return _bad_order(order_by)
+    args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
+    # Text search has no count in the library; one extra row tells
+    # whether there is a next page.
+    page = _probe_page(
+        apple_books.search_annotation_by_text(
+            text, limit=args.limit + 1, offset=args.offset, order_by=order
         ),
+        args.limit,
+        args.offset,
     )
+    chapter_maps: dict = {}
+    body = _render_page(
+        page,
+        lambda annotations: _format_grouped_by_book(
+            apple_books, annotations, chapter_maps=chapter_maps
+        ),
+        noun="matches",
+        empty_message=f"No annotations matched {text!r}.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=body)
 
 
 @mcp.tool()
-def recent_annotations(limit: int = 10):
+def recent_annotations(limit: int = 10, offset: int = 0):
     """
     Most recent annotations, newest first. Flat rows with the creation
-    date and book name inline so Claude can see chronology across
-    books at a glance.
+    time (the server's local time zone) and book name inline so Claude
+    can see chronology across books at a glance.
 
     Row format::
 
-        YYYY-MM-DD [id] text — chapter · Book Title
+        YYYY-MM-DD HH:MM [id] text — chapter · Book Title
 
     Args:
-        limit: Maximum number of annotations to return. Defaults to 10.
+        limit: Max annotations to return (1–500, default 10).
+        offset: Annotations to skip, for paging.
     """
-    annotations = apple_books.list_annotations(limit=limit, order_by="-creation_date")
-    return TextContent(
-        type="text",
-        text=_format_flat_with_timestamp(
-            apple_books, annotations, empty_message="No annotations."
-        ),
+    args = _page_args(limit, offset, default=10)
+    page = _query_page(
+        apple_books.list_annotations(order_by="-creation_date"), args.limit, args.offset
     )
+    chapter_maps: dict = {}
+    text = _render_page(
+        page,
+        lambda annotations: _format_flat_with_timestamp(
+            apple_books, annotations, chapter_maps=chapter_maps
+        ),
+        noun="annotations",
+        empty_message="No annotations.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 @mcp.tool()
@@ -813,8 +945,10 @@ def get_annotation_context(
 
     Args:
         annotation_id: The annotation's numeric ID.
-        chars_before: Chars of context before the highlight. Default 500.
-        chars_after: Chars of context after the highlight. Default 500.
+        chars_before: Chars of context before the highlight (0–5000).
+            Default 500.
+        chars_after: Chars of context after the highlight (0–5000).
+            Default 500.
     """
     try:
         anno = apple_books.get_annotation_by_id(annotation_id)
@@ -823,6 +957,17 @@ def get_annotation_context(
             type="text",
             text=f"No annotation found with id {annotation_id}.",
         )
+
+    # Clamp the window: a negative size garbles it, and a huge one
+    # returns the whole chapter.
+    notes = []
+    clamped = {}
+    for name, value in (("chars_before", chars_before), ("chars_after", chars_after)):
+        bounded = min(max(value, 0), _MAX_CONTEXT_CHARS)
+        if bounded != value:
+            notes.append(f"({name}={value} is out of range; used {bounded}.)")
+        clamped[name] = bounded
+    chars_before, chars_after = clamped["chars_before"], clamped["chars_after"]
 
     try:
         window = apple_books.get_annotation_surrounding_text(
@@ -872,38 +1017,79 @@ def get_annotation_context(
             matched = m.group(0)
             window = window.replace(matched, f"«{matched}»", 1)
 
+    if notes:
+        window = f"{window}\n\n" + "\n".join(notes)
     return TextContent(type="text", text=window)
 
 
 @mcp.tool()
-def get_annotations_by_date_range(after: str = None, before: str = None, limit: int = None):
+def get_annotations_by_date_range(
+    after: str = None,
+    before: str = None,
+    limit: int = _ANNOTATION_PAGE,
+    offset: int = 0,
+    order_by: str = "newest",
+):
     """
-    Annotations created within a date range. Flat rows with the
-    creation date and book name inline.
+    Annotations created within a date range, newest first by default.
+    Flat rows with the creation time and book name inline. Dates and
+    times are in the Mac's local time zone, named in the header.
 
     Row format::
 
-        YYYY-MM-DD [id] text — chapter · Book Title
+        YYYY-MM-DD HH:MM [id] text — chapter · Book Title
 
     Args:
         after: Only include annotations created on or after this date
-            (YYYY-MM-DD).
+            (YYYY-MM-DD, or YYYY-MM-DDTHH:MM).
         before: Only include annotations created on or before this
-            date (YYYY-MM-DD).
-        limit: Maximum number of annotations to return.
+            date (YYYY-MM-DD covers the whole day, or YYYY-MM-DDTHH:MM).
+        limit: Max annotations to return (1–500, default 50).
+        offset: Annotations to skip, for paging.
+        order_by: ``newest`` (default) or ``oldest`` first.
     """
-    after_dt = datetime.strptime(after, "%Y-%m-%d") if after else None
-    before_dt = datetime.strptime(before, "%Y-%m-%d") if before else None
+    try:
+        after_dt = _parse_date_arg("after", after)
+        before_dt = _parse_date_arg("before", before, end_of_day=True)
+    except ValueError as e:
+        return TextContent(type="text", text=str(e))
+    if after_dt and before_dt and after_dt > before_dt:
+        return TextContent(
+            type="text",
+            text=(
+                f"after ({after_dt:%Y-%m-%d %H:%M}) is later than before "
+                f"({before_dt:%Y-%m-%d %H:%M}), so no annotation can match. "
+                "Swap them."
+            ),
+        )
+    order = _order_by(order_by)
+    if order is None:
+        return _bad_order(order_by)
 
-    annotations = apple_books.get_annotations_by_date_range(
-        after=after_dt, before=before_dt, limit=limit
-    )
-    return TextContent(
-        type="text",
-        text=_format_flat_with_timestamp(
-            apple_books, annotations, empty_message="No annotations in that range."
+    args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
+    page = _query_page(
+        apple_books.get_annotations_by_date_range(
+            after=after_dt, before=before_dt, order_by=order
         ),
+        args.limit,
+        args.offset,
     )
+    # The library compares naive local times, so the zone decides which
+    # annotations fall on which day; name it.
+    span = f"{_date_range_label(after_dt, before_dt)}, local time ({_local_zone_label()})"
+    first = "newest" if order.startswith("-") else "oldest"
+    chapter_maps: dict = {}
+    text = _render_page(
+        page,
+        lambda annotations: _format_flat_with_timestamp(
+            apple_books, annotations, chapter_maps=chapter_maps
+        ),
+        noun="annotations",
+        empty_message=f"No annotations created {span}.",
+        notes=args.notes,
+        header=f"Annotations created {span}, {first} first:",
+    )
+    return TextContent(type="text", text=text)
 
 
 # -- Content Tools --
@@ -961,8 +1147,8 @@ def get_chapter_content(
 
     Default ``max_chars=10000`` (~2500 words) fits most chapters in
     one call. Longer chapters return a slice with a footer naming
-    the exact ``offset`` to pass next. ``max_chars=None`` disables
-    pagination.
+    the exact ``offset`` to pass next. At most 50000 chars are
+    returned per call.
 
     Every response ends with a footer like one of::
 
@@ -976,7 +1162,7 @@ def get_chapter_content(
         chapter_id: Chapter identifier, or the 1-based chapter order
             as a string (e.g. ``"5"``).
         offset: Character offset to start from. Defaults to 0.
-        max_chars: Max chars to return. Default 10000. ``None`` = no cap.
+        max_chars: Max chars to return (1–50000). Default 10000.
     """
     try:
         content = apple_books.get_book_content(book_id)
@@ -1004,12 +1190,20 @@ def get_chapter_content(
 
     total_chars = len(text)
 
-    # Validate inputs before slicing. ``max_chars=None`` is the
-    # documented opt-out for pagination — treated as "read to end".
+    # Validate inputs before slicing. A huge (or, from Python, None)
+    # max_chars is capped so one call can't return a whole long chapter.
     if max_chars is not None and max_chars <= 0:
         return TextContent(
             type="text", text="max_chars must be a positive integer."
         )
+    cap_note = ""
+    if max_chars is None or max_chars > _MAX_CHAPTER_CHARS:
+        if max_chars is not None:
+            cap_note = (
+                f"\n(max_chars={max_chars} is above the maximum; "
+                f"used {_MAX_CHAPTER_CHARS}.)"
+            )
+        max_chars = _MAX_CHAPTER_CHARS
     if offset < 0:
         offset = 0
     if offset >= total_chars:
@@ -1021,8 +1215,8 @@ def get_chapter_content(
             ),
         )
 
-    # Slice. Either cap at max_chars or read through to the end.
-    end = total_chars if max_chars is None else min(offset + max_chars, total_chars)
+    # Slice at max_chars or the end of the chapter, whichever is first.
+    end = min(offset + max_chars, total_chars)
     sliced = text[offset:end]
 
     # Footer always shows the exact bounds so Claude can paginate
@@ -1043,7 +1237,7 @@ def get_chapter_content(
             f"[{returned} chars]. End of chapter.)"
         )
 
-    return TextContent(type="text", text=f"{sliced}\n\n{footer}")
+    return TextContent(type="text", text=f"{sliced}\n\n{footer}{cap_note}")
 
 
 @mcp.tool()
@@ -1231,11 +1425,15 @@ def currently_reading_resource() -> str:
 @mcp.prompt()
 def weekly_digest(days: int = 7) -> str:
     """Summarize what I've read and highlighted in the past week."""
+    since = (date.today() - timedelta(days=days)).isoformat()
     return (
         f"Give me a digest of my reading from the past {days} days.\n\n"
-        f"Call `get_annotations_by_date_range` with `after` set to {days} days ago. "
+        f"Call `get_annotations_by_date_range(after=\"{since}\", limit=200)`. "
+        "If the output ends with a \"Next page: offset=N\" footer, call it again "
+        "with that offset until you have every highlight. "
         "Group highlights by book, then cluster within each book into reading sessions "
-        "(highlights within ~30 minutes of each other belong to the same session). "
+        "(highlights within ~30 minutes of each other belong to the same session; "
+        "each row shows its local time). "
         "Identify recurring themes or ideas I seem to be circling. Call out anything "
         "surprising or interesting. Keep it under 400 words."
     )
@@ -1262,9 +1460,11 @@ def revisit_book(book_title: str) -> str:
     return (
         f"I want to revisit my notes on \"{book_title}\".\n\n"
         f"1. Call `search_books_by_title` with \"{book_title}\" to find it.\n"
-        "2. Call `list_annotations` with the book's ID to pull every highlight "
-        "in reading order (each as id + text + chapter, with any note I wrote on "
-        "a `↳ note:` line below it).\n"
+        "2. Call `list_annotations` with the book's ID and `limit=200` to pull its "
+        "highlights in reading order (each as id + text + chapter, with any note I "
+        "wrote on a `↳ note:` line below it). If the output ends with a "
+        "\"Next page: offset=N\" footer, call it again with that offset until you "
+        "have every highlight.\n"
         "3. Group related highlights together by theme or argument.\n"
         "4. Surface the 2-3 most interesting threads — what was I fixated on in this book?\n"
         "5. If I wrote any notes (the `↳ note:` lines), call those out — they usually "

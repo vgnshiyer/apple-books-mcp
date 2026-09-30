@@ -113,10 +113,11 @@ def test_notes_are_shown(library, tmp_path):
     assert f"  [{noted}] noted highlight — One (ch=c1)\n    ↳ note: my own thought on this" in text
 
 
-def test_revisit_book_prompt_mentions_notes():
+def test_revisit_book_prompt_mentions_notes_and_paging():
     text = revisit_book("Some Book")
-    assert "`list_annotations`" in text
+    assert "`list_annotations`" in text and "limit=200" in text
     assert "↳ note:" in text
+    assert "Next page: offset=N" in text
 
 
 def _seed_counts(library):

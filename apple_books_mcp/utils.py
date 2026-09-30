@@ -13,8 +13,9 @@ singletons and decoupled from ``server`` import order.
 from __future__ import annotations
 
 import logging
-from datetime import datetime
-from typing import NamedTuple, Optional, TYPE_CHECKING
+import re
+from datetime import date, datetime, time
+from typing import Callable, NamedTuple, Optional, TYPE_CHECKING
 
 from py_apple_books.exceptions import (
     AppleBooksError,
@@ -36,6 +37,23 @@ logger = logging.getLogger("apple-books-mcp")
 # Typical highlights are 1–3 sentences (50–200 chars); this cap keeps
 # each row a single readable line without truncating most.
 _LEAN_TEXT_CAP = 180
+
+# Rows per call for the list and search tools. Annotation rows are
+# ~150 chars, so the default page is ~8k chars; book and collection
+# rows are short enough to list a typical library in one page. No
+# tool returns more than _MAX_PAGE rows per call.
+_ANNOTATION_PAGE = 50
+_BOOK_PAGE = 200
+_MAX_PAGE = 500
+
+# Hard cap on the characters one list or search call returns (~10k
+# tokens). A page that would exceed it is cut on a row boundary, and
+# the footer names the offset to resume from.
+_OUTPUT_BUDGET = 40_000
+
+# ``order_by`` values the annotation search tools accept, mapped to
+# the library's ordering.
+_ORDERS = {"newest": "-creation_date", "oldest": "creation_date"}
 
 
 # --------------------------------------------------------------------------
@@ -168,11 +186,13 @@ def _format_note_row(annotation, chapter_map: dict) -> str:
     return f"{primary}\n    ↳ note: {note}"
 
 
-def _iso_date(annotation) -> str:
-    """YYYY-MM-DD rendering of the annotation's creation date, or the
-    literal string ``"?"`` when missing."""
+def _created_at(annotation) -> str:
+    """``YYYY-MM-DD HH:MM`` rendering of the annotation's creation time
+    (the server's local time zone), or the literal string ``"?"`` when
+    missing. The minutes let Claude cluster rows into reading sessions.
+    """
     created = getattr(annotation, "creation_date", None)
-    return created.strftime("%Y-%m-%d") if created else "?"
+    return created.strftime("%Y-%m-%d %H:%M") if created else "?"
 
 
 def _reading_order_key(annotation) -> tuple:
@@ -190,6 +210,14 @@ def _reading_order_key(annotation) -> tuple:
     return (key is None, key or (), created)
 
 
+def _local_zone_label() -> str:
+    """The server's local time zone as ``PDT, UTC-07:00`` — the zone
+    every date and time in the tool output is in."""
+    local = datetime.now().astimezone()
+    offset = local.strftime("%z") or "+0000"
+    return f"{local.tzname()}, UTC{offset[:3]}:{offset[3:5]}"
+
+
 # --------------------------------------------------------------------------
 # Group-by-book formatter — used by the grouped-output annotation tools
 # --------------------------------------------------------------------------
@@ -202,6 +230,7 @@ def _format_grouped_by_book(
     empty_message: str = "No annotations.",
     row_formatter=None,
     book_header: Optional[callable] = None,
+    chapter_maps: Optional[dict] = None,
 ) -> str:
     """Render a list of annotations grouped by their originating book.
 
@@ -226,12 +255,18 @@ def _format_grouped_by_book(
         ``"{title} ({author}):"``. Useful for tools that want to
         include a count or filter label in the header (e.g.
         ``{count} yellow highlights``).
+    :param chapter_maps: Optional ``{book_id: chapter_map}`` cache,
+        filled as books are seen. Pass the same dict when rendering the
+        same annotations more than once (see :func:`_fit_budget`) so
+        each EPUB is parsed once per call.
     """
     annotations = list(annotations)
     if not annotations:
         return empty_message
 
     row_formatter = row_formatter or _format_lean_row
+    if chapter_maps is None:
+        chapter_maps = {}
 
     from collections import defaultdict
 
@@ -244,7 +279,9 @@ def _format_grouped_by_book(
         else:
             by_book[book.id].append((anno, book))
 
-    chapter_maps = {book_id: _chapter_title_map(api, book_id) for book_id in by_book}
+    for book_id in by_book:
+        if book_id not in chapter_maps:
+            chapter_maps[book_id] = _chapter_title_map(api, book_id)
 
     lines: list = []
     for book_id, pairs in by_book.items():
@@ -278,24 +315,26 @@ def _format_flat_with_timestamp(
     annotations,
     *,
     empty_message: str = "No annotations.",
+    chapter_maps: Optional[dict] = None,
 ) -> str:
     """Render annotations as a flat, chronologically-oriented list.
 
     Format per row::
 
-        YYYY-MM-DD [id] text — chapter · Book Title
+        YYYY-MM-DD HH:MM [id] text — chapter · Book Title
 
-    The book title appears per-row (not as a group header) because
-    time-oriented tools tend to jump between books, and Claude needs
-    the book context inline. Chapter resolution still uses
-    :func:`_chapter_title_map` — cached across rows so we only parse
-    each EPUB once per call.
+    Times are in the server's local time zone. The book title appears
+    per-row (not as a group header) because time-oriented tools tend to
+    jump between books, and Claude needs the book context inline.
+    Chapter resolution still uses :func:`_chapter_title_map` — cached
+    across rows (and across calls sharing ``chapter_maps``) so we only
+    parse each EPUB once per call.
     """
     annotations = list(annotations)
     if not annotations:
         return empty_message
 
-    chapter_map_cache: dict = {}
+    chapter_map_cache: dict = {} if chapter_maps is None else chapter_maps
 
     def ch_map_for(book_id):
         if book_id not in chapter_map_cache:
@@ -308,8 +347,225 @@ def _format_flat_with_timestamp(
         ch_map = ch_map_for(book.id) if book else {}
         row = _format_lean_row(anno, ch_map)
         book_suffix = f" · {book.title}" if book else " · (book no longer in library)"
-        lines.append(f"{_iso_date(anno)} {row}{book_suffix}")
+        lines.append(f"{_created_at(anno)} {row}{book_suffix}")
     return "\n".join(lines)
+
+
+# --------------------------------------------------------------------------
+# Paging — shared by the list and search tools
+# --------------------------------------------------------------------------
+
+
+class _PageArgs(NamedTuple):
+    """``limit`` and ``offset`` after clamping, plus one note per value
+    that had to be changed (shown under the output)."""
+
+    limit: int
+    offset: int
+    notes: list
+
+
+class _Page(NamedTuple):
+    """One page of results. ``total`` is None when counting every match
+    would cost a second full query (text search); ``more`` says whether
+    rows exist past this page either way."""
+
+    items: list
+    offset: int
+    total: Optional[int]
+    more: bool
+
+
+def _page_args(limit, offset, *, default: int) -> _PageArgs:
+    """Clamp ``limit`` to 1..:data:`_MAX_PAGE` (None means ``default``)
+    and ``offset`` to >= 0. Out-of-range values are clamped rather than
+    rejected, with a note, so a call never silently returns everything.
+    """
+    notes: list = []
+    if limit is None:
+        limit = default
+    elif limit < 1:
+        notes.append(f"(limit={limit} is below the minimum; used limit=1.)")
+        limit = 1
+    elif limit > _MAX_PAGE:
+        notes.append(f"(limit={limit} is above the maximum; used limit={_MAX_PAGE}.)")
+        limit = _MAX_PAGE
+    if offset is None:
+        offset = 0
+    elif offset < 0:
+        notes.append(f"(offset={offset} is negative; used offset=0.)")
+        offset = 0
+    return _PageArgs(limit, offset, notes)
+
+
+def _query_page(results, limit: int, offset: int) -> _Page:
+    """Rows ``[offset, offset + limit)`` of a library query
+    (a ``ModelIterable``): the total comes from ``count()`` (a
+    ``COUNT(*)``) and the rows from a slice (a ``LIMIT``/``OFFSET``
+    query), so nothing past the page is loaded.
+    """
+    total = results.count()
+    items = list(results[offset:offset + limit]) if offset < total else []
+    return _Page(items, offset, total, offset + len(items) < total)
+
+
+def _list_page(rows: list, limit: int, offset: int) -> _Page:
+    """Rows ``[offset, offset + limit)`` of an already-loaded list."""
+    items = rows[offset:offset + limit]
+    return _Page(items, offset, len(rows), offset + len(items) < len(rows))
+
+
+def _probe_page(rows: list, limit: int, offset: int) -> _Page:
+    """A page from a query run with ``limit + 1`` rows at ``offset``:
+    the extra row, if any, only says there are more. Used where the
+    library has no count (text search returns a list)."""
+    return _Page(list(rows[:limit]), offset, None, len(rows) > limit)
+
+
+def _order_by(order: str) -> Optional[str]:
+    """Map a tool's ``order_by`` (``newest``/``oldest``) to the
+    library's; None for anything else."""
+    return _ORDERS.get((order or "").strip().lower())
+
+
+def _fit_budget(
+    render: Callable[[list], str], items: list, budget: int = _OUTPUT_BUDGET
+) -> tuple:
+    """Render the longest leading run of ``items`` whose output fits in
+    ``budget`` characters — always at least one row. Returns
+    ``(text, rows_rendered)``; the caller resumes at the row after.
+
+    ``render`` is called O(log n) times when the page doesn't fit, so
+    it should reuse anything expensive (chapter maps) across calls.
+    """
+    text = render(items)
+    if len(text) <= budget or len(items) <= 1:
+        return text, len(items)
+    # Binary search for the largest prefix that fits (output grows
+    # with every row added).
+    best = None
+    low, high = 1, len(items) - 1
+    while low <= high:
+        mid = (low + high) // 2
+        candidate = render(items[:mid])
+        if len(candidate) <= budget:
+            best = (candidate, mid)
+            low = mid + 1
+        else:
+            high = mid - 1
+    return best or (render(items[:1]), 1)
+
+
+def _page_footer(
+    noun: str, offset: int, shown: int, total: Optional[int], more: bool, capped: bool
+) -> str:
+    """``Showing 51–100 of 1,117 annotations. Next page: offset=100.``
+
+    Empty when the first page holds everything, so short results read
+    exactly as before.
+    """
+    if not more and not offset:
+        return ""
+    end = offset + shown
+    if total is not None:
+        span = f"Showing {offset + 1:,}–{end:,} of {total:,} {noun}"
+    elif more:
+        span = f"Showing {offset + 1:,}–{end:,} of more than {end:,} {noun}"
+    else:
+        span = f"Showing {offset + 1:,}–{end:,} of {end:,} {noun}"
+    if capped:
+        span += f" (output capped at {_OUTPUT_BUDGET:,} chars)"
+    if more:
+        return f"{span}. Next page: offset={end}."
+    return f"{span} (end)."
+
+
+def _render_page(
+    page: _Page,
+    render: Callable[[list], str],
+    *,
+    noun: str,
+    empty_message: str,
+    notes: list = (),
+    header: str = "",
+) -> str:
+    """Render one page of a list or search tool: optional header line,
+    the rows (cut to :data:`_OUTPUT_BUDGET`), then any clamp notes and
+    the paging footer.
+    """
+    if page.items:
+        body, shown = _fit_budget(render, page.items)
+        capped = shown < len(page.items)
+        footer = _page_footer(
+            noun, page.offset, shown, page.total, page.more or capped, capped
+        )
+        parts = [header, body]
+    elif page.offset and page.total != 0:
+        past = f" (there are {page.total:,})" if page.total is not None else ""
+        footer = ""
+        parts = [f"No {noun} at offset {page.offset}{past}. Pass a smaller offset."]
+    else:
+        footer = ""
+        parts = [empty_message]
+    tail = "\n".join(line for line in (*notes, footer) if line)
+    text = "\n".join(part for part in parts if part)
+    return f"{text}\n\n{tail}" if tail else text
+
+
+# --------------------------------------------------------------------------
+# Date-range arguments
+# --------------------------------------------------------------------------
+
+_DATE_ONLY = re.compile(r"\d{4}-\d{2}-\d{2}")
+
+
+def _parse_date_arg(name: str, value, *, end_of_day: bool = False) -> Optional[datetime]:
+    """Parse a date-range bound given as ``YYYY-MM-DD`` or an ISO
+    datetime into a naive datetime in the server's local time zone —
+    the zone the library's annotation dates are in.
+
+    A date-only value means the start of that day, or with
+    ``end_of_day`` (the ``before`` bound) its last instant, so that
+    "on or before" covers the whole day. A datetime with a zone is
+    converted to local time. Raises ValueError with a message meant
+    for the caller on anything else.
+    """
+    if value is None or value == "":
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    elif isinstance(value, date):
+        parsed = datetime.combine(value, time.max if end_of_day else time.min)
+    else:
+        text = str(value).strip()
+        try:
+            if _DATE_ONLY.fullmatch(text):
+                day = date.fromisoformat(text)
+                parsed = datetime.combine(day, time.max if end_of_day else time.min)
+            else:
+                # Python 3.10's fromisoformat doesn't accept a "Z" suffix.
+                parsed = datetime.fromisoformat(re.sub(r"[zZ]$", "+00:00", text))
+        except ValueError:
+            raise ValueError(
+                f"{name}={text!r} is not a date. Use YYYY-MM-DD, or "
+                f"YYYY-MM-DDTHH:MM for a time of day."
+            ) from None
+    if parsed.tzinfo is not None:
+        parsed = parsed.astimezone().replace(tzinfo=None)
+    return parsed
+
+
+def _date_range_label(after: Optional[datetime], before: Optional[datetime]) -> str:
+    """``from 2025-01-01 00:00 through 2025-01-31 23:59`` (either end
+    may be open)."""
+    fmt = "%Y-%m-%d %H:%M"
+    if after and before:
+        return f"from {after.strftime(fmt)} through {before.strftime(fmt)}"
+    if after:
+        return f"from {after.strftime(fmt)} on"
+    if before:
+        return f"through {before.strftime(fmt)}"
+    return "at any time"
 
 
 # --------------------------------------------------------------------------
