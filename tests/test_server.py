@@ -2,6 +2,7 @@ import pytest
 from datetime import datetime
 from unittest.mock import patch
 from py_apple_books import LibraryStats
+from py_apple_books.models.location import Location
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
     list_all_books, describe_book,
@@ -58,6 +59,11 @@ class MockLocation:
         self.cfi = cfi
         self.chapter_id = chapter_id
         self.char_range = char_range
+        # Document-order fields (py-apple-books 1.10), parsed as the
+        # library does.
+        parsed = Location(cfi)
+        self.sort_key = parsed.sort_key
+        self.spine_index = parsed.spine_index
 
     def __bool__(self):
         return bool(self.cfi)
@@ -80,6 +86,7 @@ class MockAnnotation:
         self.location = MockLocation(
             cfi="epubcfi(/6/8[chap1]!/4/2/1:0)", chapter_id="chap1"
         )
+        self.note = None
         self.creation_date = datetime(2026, 4, 16, 14, 23, 45)
         self.modification_date = datetime(2026, 4, 16, 14, 24, 0)
 

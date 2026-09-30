@@ -175,6 +175,21 @@ def _iso_date(annotation) -> str:
     return created.strftime("%Y-%m-%d") if created else "?"
 
 
+def _reading_order_key(annotation) -> tuple:
+    """Sort key that puts a book's annotations in reading order.
+
+    Uses the CFI's document order (:attr:`Location.sort_key`: the spine
+    position, then the steps and character offset within the chapter),
+    so it needs no ToC and works for books that can't be opened (DRM,
+    iCloud-only). Creation time breaks ties; annotations without a CFI
+    go last.
+    """
+    location = getattr(annotation, "location", None)
+    key = location.sort_key if location else None
+    created = getattr(annotation, "creation_date", None) or datetime.min
+    return (key is None, key or (), created)
+
+
 # --------------------------------------------------------------------------
 # Group-by-book formatter — used by the grouped-output annotation tools
 # --------------------------------------------------------------------------

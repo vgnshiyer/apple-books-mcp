@@ -27,9 +27,9 @@ from apple_books_mcp.utils import (
     _format_collection_row,
     _format_flat_with_timestamp,
     _format_grouped_by_book,
-    _format_lean_row,
     _format_note_row,
     _get_book_title,
+    _reading_order_key,
     _resolve_current_chapter,
 )
 
@@ -547,10 +547,11 @@ def get_recently_read_books(limit: int = 10):
 def list_all_annotations(limit: int = None):
     """
     Browse all annotations grouped by book, most recent first. Rows:
-    ``[annotation_id] <text> — <chapter title> (ch=<id>)``. Pass
-    ``ch=<id>`` to ``get_chapter_content`` for the chapter, or call
-    ``get_annotation_context(annotation_id)`` for the passage around
-    a specific highlight.
+    ``[annotation_id] <text> — <chapter title> (ch=<id>)``, with the
+    user's note, if any, on a second line prefixed with ``↳ note:``.
+    Pass ``ch=<id>`` to ``get_chapter_content`` for the chapter, or
+    call ``get_annotation_context(annotation_id)`` for the passage
+    around a specific highlight.
 
     Args:
         limit: Max annotations to return. Unlimited by default — can
@@ -589,12 +590,12 @@ def list_all_annotations(limit: int = None):
         lines.append(f"\n{book.title} ({author}):")
         ch_map = chapter_maps[book_id]
         for anno, _ in pairs:
-            lines.append(f"  {_format_lean_row(anno, ch_map)}")
+            lines.append(f"  {_format_note_row(anno, ch_map)}")
 
     if orphans:
         lines.append("\nUnassigned (book no longer in library):")
         for anno in orphans:
-            lines.append(f"  {_format_lean_row(anno, {})}")
+            lines.append(f"  {_format_note_row(anno, {})}")
 
     return TextContent(type="text", text="\n".join(lines).lstrip())
 
@@ -602,9 +603,10 @@ def list_all_annotations(limit: int = None):
 @mcp.tool()
 def list_annotations(book_id: int, limit: int = None):
     """
-    List annotations within a specific book, ordered by chapter
-    position in the book (reading order). Rows are lean —
-    ``[annotation_id] <text> — <chapter> (ch=<id>)``.
+    List annotations within a specific book in reading order (their
+    position in the book). Rows are lean —
+    ``[annotation_id] <text> — <chapter> (ch=<id>)`` — with the user's
+    note, if any, on a second line prefixed with ``↳ note:``.
 
     Args:
         book_id: The book's numeric ID.
@@ -615,31 +617,19 @@ def list_annotations(book_id: int, limit: int = None):
     except IndexError:
         return TextContent(type="text", text=f"No book found with id {book_id}.")
 
-    annotations = list(book.annotations)
+    # Reading order comes from each annotation's CFI, so it needs no
+    # ToC (and works for books that can't be opened); the ToC is only
+    # read for chapter titles. The limit is applied after sorting.
+    annotations = sorted(book.annotations, key=_reading_order_key)
     if not annotations:
         return TextContent(
             type="text", text=f"No annotations in '{book.title}'."
         )
-
-    ch_map = _chapter_title_map(apple_books, book.id)
-    # Also precompute chapter order for a reading-order sort.
-    try:
-        content = apple_books.get_book_content(book.id)
-        chapter_order = {c.id: c.order for c in content.list_chapters()}
-    except (BookNotDownloadedError, DRMProtectedError, AppleBooksError):
-        chapter_order = {}
-
-    def _sort_key(a):
-        cid = a.location.chapter_id if a.location else None
-        order = chapter_order.get(cid, float("inf")) if cid else float("inf")
-        created = getattr(a, "creation_date", None)
-        return (order, created or datetime.min)
-
-    annotations.sort(key=_sort_key)
     if limit:
         annotations = annotations[:limit]
 
-    lines = [_format_lean_row(a, ch_map) for a in annotations]
+    ch_map = _chapter_title_map(apple_books, book.id)
+    lines = [_format_note_row(a, ch_map) for a in annotations]
     return TextContent(type="text", text="\n".join(lines))
 
 
@@ -1273,10 +1263,11 @@ def revisit_book(book_title: str) -> str:
         f"I want to revisit my notes on \"{book_title}\".\n\n"
         f"1. Call `search_books_by_title` with \"{book_title}\" to find it.\n"
         "2. Call `list_annotations` with the book's ID to pull every highlight "
-        "(returns each as id + text + chapter).\n"
+        "in reading order (each as id + text + chapter, with any note I wrote on "
+        "a `↳ note:` line below it).\n"
         "3. Group related highlights together by theme or argument.\n"
         "4. Surface the 2-3 most interesting threads — what was I fixated on in this book?\n"
-        "5. If I wrote any notes (not just highlights), call those out — they usually "
+        "5. If I wrote any notes (the `↳ note:` lines), call those out — they usually "
         "contain my actual thinking.\n\n"
         "Format as a short essay, not a list. Quote me back to myself."
     )
