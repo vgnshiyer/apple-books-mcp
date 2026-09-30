@@ -1,10 +1,11 @@
-"""The MCP surface of the tools (F06).
+"""The MCP surface of the tools and the resource (F06, F46).
 
 Checked through FastMCP itself on whichever mcp 1.x is installed: the
 lock pins 1.6.0, while a fresh install resolves the latest 1.x, which
 derives output schemas from return annotations.
 """
 import asyncio
+from datetime import datetime, timezone
 
 import pytest
 from py_apple_books import PyAppleBooks
@@ -51,3 +52,30 @@ def test_tool_call_is_one_text_block(library, name, arguments):
     assert result[0].type == "text"
     assert result[0].text
 
+
+def test_currently_reading_description_matches_content(library):
+    """F46: the resource's description lists what it actually holds —
+    and the content holds it."""
+    resources = asyncio.run(mcp.list_resources())
+    (resource,) = [r for r in resources if str(r.uri) == "apple-books://currently-reading"]
+    description = resource.description.lower()
+    for item in ("title", "author", "book id", "progress", "chapter",
+                 "chapter_id", "how many highlights"):
+        assert item in description, item
+    assert "no chapter text" in description
+
+    book = library.add_book(
+        "Pointer Book", "Pointer Author", progress=0.4,
+        last_opened=datetime(2026, 9, 20, tzinfo=timezone.utc))
+    library.add_annotation(book, "first pointer highlight")
+    library.add_annotation(book, "second pointer highlight")
+    library.add_annotation(book, "deleted pointer highlight", deleted=True)
+
+    result = asyncio.run(mcp.read_resource("apple-books://currently-reading"))
+    content = result[0].content
+    assert "Currently Reading: Pointer Book by Pointer Author" in content
+    assert f"Book id: {book['id']}" in content
+    assert "Progress: In Progress (40.0%)" in content
+    # Live highlights only, counted without loading them.
+    assert f"Highlights in this book: 2  (use list_annotations({book['id']}) to browse)" in content
+    assert "pointer highlight" not in content

@@ -411,8 +411,9 @@ def describe_book(book_id: str):
         lines.append(f"  Rating:   {rating}/5")
 
     # Annotation count — useful signal for "should I bother listing them?"
+    # Counted in SQL; no annotation is loaded.
     try:
-        anno_count = len(list(book.annotations))
+        anno_count = book.annotations.count()
     except Exception:
         anno_count = 0
     if anno_count:
@@ -1143,49 +1144,31 @@ def get_current_reading_position(book_id: int):
 @mcp.tool()
 def get_library_stats():
     """Get a summary of your Apple Books library with reading stats."""
-    books = list(apple_books.list_books())
-    annotations = list(apple_books.list_annotations())
+    # Counted in SQL by the library (a handful of statements); no book
+    # or annotation is loaded.
+    stats = apple_books.get_library_stats()
 
-    total_books = len(books)
-    finished = sum(1 for b in books if getattr(b, "is_finished", False))
-    in_progress = sum(
-        1 for b in books
-        if (getattr(b, "reading_progress", 0) or 0) > 0
-        and not getattr(b, "is_finished", False)
-    )
-    unstarted = total_books - finished - in_progress
-
-    total_annotations = len(annotations)
-
-    # Count annotations per book, keeping orphans (annotations whose
-    # asset_id no longer maps to a book in the library) in a separate
-    # bucket — otherwise they cluster into a misleading "Unknown Book"
-    # entry that dominates the "most annotated" list.
-    anno_counts: dict = {}
-    orphan_count = 0
-    for anno in annotations:
-        book = getattr(anno, "book", None)
-        if book is None:
-            orphan_count += 1
-            continue
-        key = (book.id, book.title or "Unknown Title")
-        anno_counts[key] = anno_counts.get(key, 0) + 1
-
-    top_annotated = sorted(anno_counts.items(), key=lambda x: x[1], reverse=True)[:5]
+    # Orphans (annotations whose asset_id no longer maps to a book in
+    # the library) are counted separately — otherwise they cluster into
+    # a misleading "Unknown Book" entry that dominates the "most
+    # annotated" list. annotations_per_book is most annotated first,
+    # ties by book id.
+    top_annotated = stats.annotations_per_book[:5]
     top_str = "\n".join(
-        f"  [{bid}] {title}: {count}" for (bid, title), count in top_annotated
+        f"  [{bid}] {title or 'Unknown Title'}: {count}"
+        for bid, title, count in top_annotated
     )
 
     lines = [
-        f"Total books: {total_books}",
-        f"  Finished: {finished}",
-        f"  In progress: {in_progress}",
-        f"  Unstarted: {unstarted}",
-        f"Total annotations: {total_annotations}",
+        f"Total books: {stats.total_books}",
+        f"  Finished: {stats.finished_books}",
+        f"  In progress: {stats.in_progress_books}",
+        f"  Unstarted: {stats.unstarted_books}",
+        f"Total annotations: {stats.total_annotations}",
     ]
-    if orphan_count:
+    if stats.orphan_annotations:
         lines.append(
-            f"  ({orphan_count} from books no longer in the library)"
+            f"  ({stats.orphan_annotations} from books no longer in the library)"
         )
     lines.append("Most annotated books:")
     lines.append(top_str if top_annotated else "  (none)")
@@ -1198,17 +1181,19 @@ def get_library_stats():
     "apple-books://currently-reading",
     name="Currently Reading",
     description=(
-        "A lightweight pointer to the book you're actively reading right "
-        "now — title, author, ids, progress, and the chapter you last "
-        "left off on. Attach this to any conversation to give Claude your "
-        "reading context without pulling chapter text or annotations; "
-        "Claude can fetch those on demand via get_chapter_content, "
-        "list_annotations, and get_annotation_context."
+        "A short pointer (a few hundred chars) to the in-progress book "
+        "you opened most recently: its title, author, book id and "
+        "reading progress, the chapter you left off on (title and "
+        "chapter_id, or inferred from your latest highlight when Books "
+        "hasn't recorded a position), and how many highlights it has. "
+        "It holds no chapter text and no highlight text; Claude fetches "
+        "those on demand with get_chapter_content, list_annotations "
+        "and get_annotation_context."
     ),
     mime_type="text/plain",
 )
 def currently_reading_resource() -> str:
-    """Lean resource: metadata + ids + chapter pointer.
+    """Lean resource: metadata + ids + chapter pointer + highlight count.
 
     By design this does NOT embed chapter text or annotations — pulling
     them eagerly inflated attached context by ~10–15k chars per use.
@@ -1234,10 +1219,11 @@ def currently_reading_resource() -> str:
     if reading_section:
         sections.append(reading_section)
 
-    # Annotation count only — keeps the resource cheap. Claude can call
-    # list_annotations(book_id) when it actually wants to browse them.
+    # Annotation count only — keeps the resource cheap (counted in SQL).
+    # Claude can call list_annotations(book_id) when it actually wants
+    # to browse them.
     try:
-        anno_count = len(list(book.annotations))
+        anno_count = book.annotations.count()
     except Exception:
         anno_count = 0
     if anno_count:

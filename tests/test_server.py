@@ -1,6 +1,7 @@
 import pytest
 from datetime import datetime
 from unittest.mock import patch
+from py_apple_books import LibraryStats
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
     list_all_books, describe_book,
@@ -19,12 +20,21 @@ from apple_books_mcp.server import (
 )
 
 
+class MockResults(list):
+    """A list with the ``count()`` of py-apple-books 1.10's
+    ``ModelIterable`` (a ``COUNT(*)`` there). Slicing returns a list,
+    as a ``ModelIterable`` slice does."""
+
+    def count(self):
+        return len(self)
+
+
 class MockBook:
     def __init__(self):
         self.id = "book1"
         self.title = "Book 1"
         self.author = "Author 1"
-        self.annotations = []
+        self.annotations = MockResults()
         self.reading_progress = 45.0
         self.is_finished = False
         self.last_opened_date = None
@@ -101,7 +111,7 @@ def mock_apple_books():
     with patch('apple_books_mcp.server.apple_books') as mock:
         book = MockBook()
         anno = MockAnnotation()
-        book.annotations = [anno]
+        book.annotations = MockResults([anno])
 
         mock.list_collections.return_value = [MockCollection()]
         mock.get_collection_by_id.return_value = MockCollection()
@@ -124,6 +134,11 @@ def mock_apple_books():
         mock.get_recently_read_books.return_value = [book]
         mock.get_annotations_by_date_range.return_value = [anno]
         mock.get_books_by_genre.return_value = [book]
+        mock.get_library_stats.return_value = LibraryStats(
+            total_books=1, finished_books=0, in_progress_books=1,
+            unstarted_books=0, total_annotations=1, orphan_annotations=0,
+            annotations_per_book=(("book1", "Book 1", 1),),
+        )
 
         # Collection write methods (v0.8.0)
         mock.create_collection.return_value = MockCollection()
@@ -198,7 +213,7 @@ def test_list_annotations_empty_for_book_with_none(mock_apple_books):
     # Book exists but has no annotations — should return a friendly
     # message instead of empty output.
     book = mock_apple_books.get_book_by_id.return_value
-    book.annotations = []
+    book.annotations = MockResults()
     result = list_annotations("book1")
     assert "No annotations" in result.text
 
@@ -435,9 +450,11 @@ def test_get_library_stats(mock_apple_books):
     assert "Total books: 1" in result.text
     assert "Total annotations: 1" in result.text
     assert "Most annotated books:" in result.text
-    assert "Book 1" in result.text
-    mock_apple_books.list_books.assert_called_once()
-    mock_apple_books.list_annotations.assert_called_once()
+    assert "[book1] Book 1: 1" in result.text
+    # Counted by the library in SQL; no book or annotation is loaded.
+    mock_apple_books.get_library_stats.assert_called_once_with()
+    mock_apple_books.list_books.assert_not_called()
+    mock_apple_books.list_annotations.assert_not_called()
 
 
 # ---------------------------------------------------------------------------
@@ -550,7 +567,7 @@ def test_get_current_reading_position_truly_truly_absent(mock_apple_books):
     mock_apple_books.get_current_reading_chapter.return_value = None
     mock_apple_books.get_current_reading_location.return_value = None
     book = mock_apple_books.get_book_by_id.return_value
-    book.annotations = []
+    book.annotations = MockResults()
     result = get_current_reading_position(999)
     assert "No reading position and no highlights yet" in result.text
 
@@ -559,10 +576,11 @@ def test_library_stats_separates_orphan_annotations(mock_apple_books):
     """v0.7.1: orphan annotations (book no longer in library) are
     counted separately instead of clustering under 'Unknown Book' in
     the 'most annotated' list."""
-    orphan = MockAnnotation()
-    orphan.book = None
-    valid = MockAnnotation()
-    mock_apple_books.list_annotations.return_value = [orphan, valid]
+    mock_apple_books.get_library_stats.return_value = LibraryStats(
+        total_books=1, finished_books=0, in_progress_books=1,
+        unstarted_books=0, total_annotations=2, orphan_annotations=1,
+        annotations_per_book=(("book1", "Book 1", 1),),
+    )
 
     result = get_library_stats()
     # 'Unknown Book' should NOT appear in the top list anymore.
