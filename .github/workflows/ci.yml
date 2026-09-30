@@ -45,4 +45,4 @@ jobs:
           mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
           touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
       - run: uv build --wheel
-      - run: python3 scripts/smoke_test.py uvx --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp
+      - run: python3 scripts/smoke_test.py uvx --refresh --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp
