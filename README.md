@@ -24,11 +24,13 @@ And much more!
 
 ## Available Tools
 
+List and search tools return one page at a time: 50 annotations or 200 books by default, `limit` between 1 and 500, and `offset` for the next page. When there is more, the output says so and names the next `offset`.
+
 ### Collections
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| list_all_collections | List all collections | limit?: int |
+| list_all_collections | List all collections | limit?: int (default: 200), offset?: int |
 | get_collection_books | Get all books in a collection | collection_id: str |
 | describe_collection | Get details of a collection | collection_id: str |
 | search_collections_by_title | Search for collections by title | title: str |
@@ -57,33 +59,33 @@ Apple provides no automation API for collections, so these write directly to the
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| list_all_books | List all books | limit?: int |
+| list_all_books | List all books | limit?: int (default: 200), offset?: int |
 | describe_book | Get details of a particular book (metadata, progress, annotation count, description) | book_id: str |
-| list_annotations | Get all annotations for a book (id + text + chapter per row, chapter-ordered) | book_id: int, limit?: int |
+| list_annotations | Annotations for a book in reading order (id + text + chapter per row, with your notes) | book_id: int, limit?: int (default: 50), offset?: int |
 | search_books_by_title | Search for books by title | title: str |
-| get_books_by_genre | Get books by genre (substring match) | genre: str, limit?: int |
+| get_books_by_genre | Get books by genre (substring match) | genre: str, limit?: int (default: 200), offset?: int |
 
 ### Reading Status
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| get_books_in_progress | Get books currently being read | limit?: int |
-| get_finished_books | Get books that have been finished | limit?: int |
-| get_unstarted_books | Get books not yet started | limit?: int |
-| get_recently_read_books | Get most recently opened books | limit?: int (default: 10) |
+| get_books_in_progress | Get books currently being read | limit?: int (default: 200), offset?: int |
+| get_finished_books | Get books that have been finished | limit?: int (default: 200), offset?: int |
+| get_unstarted_books | Get books not yet started | limit?: int (default: 200), offset?: int |
+| get_recently_read_books | Get the most recently read books | limit?: int (default: 10), offset?: int |
 
 ### Annotations
 
 | Tool | Description | Parameters |
 |------|-------------|------------|
-| list_all_annotations | Browse every annotation grouped by book, newest first | limit?: int |
-| recent_annotations | Get most recent annotations (flat, with date + book per row) | limit?: int (default: 10) |
+| list_all_annotations | Browse every annotation grouped by book, newest first, with your notes | limit?: int (default: 50), offset?: int |
+| recent_annotations | Get most recent annotations (flat, with date + book per row) | limit?: int (default: 10), offset?: int |
 | describe_annotation | Get full details of a single annotation | annotation_id: str |
 | get_annotation_context | Text window around a highlight (the paragraph it's in), with the highlight marked `«...»` | annotation_id: int, chars_before?: int (default: 500), chars_after?: int (default: 500) |
-| get_highlights_by_color | Highlights of a particular color, grouped by book | color: str, limit?: int |
-| search_notes | Search user notes (shows highlight + note inline) | note: str, limit?: int |
-| search_annotations | Search across highlights + notes + surrounding text | text: str, limit?: int |
-| get_annotations_by_date_range | Annotations within a date range (flat, with date + book per row) | after?: YYYY-MM-DD, before?: YYYY-MM-DD, limit?: int |
+| get_highlights_by_color | Highlights of a particular color, grouped by book | color: str, limit?: int (default: 50), offset?: int, order_by?: newest\|oldest |
+| search_notes | Search user notes (shows highlight + note inline) | note: str, limit?: int (default: 50), offset?: int, order_by?: newest\|oldest |
+| search_annotations | Search across highlights + notes + surrounding text | text: str, limit?: int (default: 50), offset?: int, order_by?: newest\|oldest |
+| get_annotations_by_date_range | Annotations within a date range, inclusive of the `before` day, local time (flat, with date + book per row) | after?: YYYY-MM-DD, before?: YYYY-MM-DD, limit?: int (default: 50), offset?: int, order_by?: newest\|oldest |
 
 ### Library Stats
 

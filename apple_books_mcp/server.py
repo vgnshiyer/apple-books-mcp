@@ -188,7 +188,7 @@ def search_collections_by_title(title: str):
 _WRITES_DISABLED_MSG = (
     "Collection editing is disabled. To enable it, add \"--enable-writes\" "
     "to this server's args in your Claude Desktop config, e.g.\n\n"
-    '  "args": ["apple-books-mcp@latest", "--enable-writes"]\n\n'
+    '  "args": ["apple-books-mcp", "--enable-writes"]\n\n'
     "then restart Claude Desktop. Writes always refuse while Books is "
     "open, and every change takes an automatic backup first."
 )
@@ -584,7 +584,8 @@ def get_unstarted_books(limit: int = _BOOK_PAGE, offset: int = 0):
 @mcp.tool()
 def get_recently_read_books(limit: int = 10, offset: int = 0):
     """
-    Get most recently opened books, ordered by last opened date.
+    Get the most recently read books, newest first (by when each was
+    last opened or read, whichever is later).
     Output per row: ``[id] title by author`` with a progress summary
     below.
 
