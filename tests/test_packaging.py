@@ -15,6 +15,7 @@ import re
 import subprocess
 import sys
 import threading
+import zipfile
 from pathlib import Path
 
 import pytest
@@ -166,6 +167,52 @@ def test_bundle_contents(tmp_path):
     assert files == {"manifest.json", "pyproject.toml", "uv.lock", "README.md", "LICENSE"} | package
     staged_manifest = json.loads((staged / "manifest.json").read_text(encoding="utf-8"))
     assert staged_manifest == _rendered()
+
+
+def _zip(staged, bundle, extra=None):
+    with zipfile.ZipFile(bundle, "w") as archive:
+        for p in sorted(staged.rglob("*")):
+            if p.is_file():
+                data = p.read_bytes()
+                if p.name == "manifest.json" and extra == "changed":
+                    data += b" "
+                archive.writestr(p.relative_to(staged).as_posix(), data)
+        if extra == "added":
+            archive.writestr("node_modules/x.js", b"")
+
+
+def test_packed_bundle_checked(tmp_path):
+    """F39: the packer is third-party code; a bundle that isn't byte
+    for byte the staged files fails the build."""
+    staged = build_mcpb.stage(tmp_path / "bundle", _rendered())
+    _zip(staged, tmp_path / "ok.mcpb")
+    build_mcpb.check_packed(tmp_path / "ok.mcpb", staged)
+    for extra in ("added", "changed"):
+        _zip(staged, tmp_path / f"{extra}.mcpb", extra)
+        with pytest.raises(SystemExit):
+            build_mcpb.check_packed(tmp_path / f"{extra}.mcpb", staged)
+
+
+def test_packer_locked():
+    """F39: the packer and its whole dependency tree come from
+    mcpb/package-lock.json by hash (npm ci, no install scripts), not
+    whatever npx resolves on the day."""
+    package = json.loads((ROOT / "mcpb" / "package.json").read_text(encoding="utf-8"))
+    lock = json.loads((ROOT / "mcpb" / "package-lock.json").read_text(encoding="utf-8"))
+    ((name, version),) = package["devDependencies"].items()
+    assert name == "@anthropic-ai/mcpb" and re.fullmatch(r"\d+\.\d+\.\d+", version)
+    assert lock["packages"][""]["devDependencies"] == package["devDependencies"]
+    assert lock["packages"][f"node_modules/{name}"]["version"] == version
+    for path, entry in lock["packages"].items():
+        if path:
+            assert entry["integrity"].startswith("sha512-"), path
+            assert not entry.get("hasInstallScript"), path
+    assert build_mcpb.PACKER.relative_to(ROOT).as_posix() == "mcpb/node_modules/.bin/mcpb"
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        text = workflow.read_text(encoding="utf-8")
+        assert "npx" not in text, workflow.name
+        for npm in re.findall(r"^\s*(?:-\s*)?(?:run:\s*)?(npm\s.*)$", text, re.M):
+            assert npm.startswith("npm ci --ignore-scripts"), (workflow.name, npm)
 
 
 def test_desktop_command():

@@ -25,6 +25,17 @@ updates:
       python:
         patterns: ["*"]
 
+  # The MCPB packer scripts/build_mcpb.py runs, locked with its tree.
+  - package-ecosystem: npm
+    directory: /mcpb
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      mcpb:
+        patterns: ["*"]
+
   - package-ecosystem: docker
     directory: /
     schedule:

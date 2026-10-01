@@ -47,6 +47,11 @@ jobs:
       - name: Smoke-test the wheel as users install it
         run: python3 scripts/smoke_test.py uvx --refresh --from dist/*.whl apple-books-mcp
 
+      # The packer and its dependencies exactly as mcpb/package-lock.json
+      # pins them, without running their install scripts.
+      - name: Install the MCPB packer
+        run: npm ci --ignore-scripts --no-audit --no-fund --prefix mcpb
+
       - name: Build the Claude Desktop extension and the registry's server.json
         run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
 
