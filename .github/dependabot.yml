@@ -13,7 +13,9 @@ updates:
         patterns: ["*"]
 
   # uv.lock only: the bounds in pyproject.toml (mcp<2, the Python floor)
-  # are deliberate, and users resolve them fresh anyway.
+  # are deliberate, and users resolve them fresh anyway. The lock is what
+  # the Claude Desktop extension installs, so it should stay current;
+  # CI's floor job tests the declared minimums.
   - package-ecosystem: uv
     directory: /
     schedule:
