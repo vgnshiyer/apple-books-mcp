@@ -10,6 +10,9 @@ on:
     - cron: "0 14 * * 1"
   workflow_dispatch:
 
+permissions:
+  contents: read
+
 jobs:
   test:
     runs-on: ubuntu-latest
@@ -17,8 +20,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Stub the Apple Books databases
         # py-apple-books opens these at import time; empty files are valid SQLite databases.
@@ -26,9 +33,11 @@ jobs:
           d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
           mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
           touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
-      # The dev install (uv sync) provides the console script.
-      - run: uv run --frozen --python ${{ matrix.python-version }} apple-books-mcp --version
-      - run: uv run --frozen --python ${{ matrix.python-version }} pytest -q
+      # --locked fails if uv.lock is stale, rather than testing a different
+      # resolution than the one the release ships. The dev install (uv
+      # sync) provides the console script.
+      - run: uv run --locked apple-books-mcp --version
+      - run: uv run --locked pytest -q
 
   smoke:
     # Installs the built wheel the way users do (uvx, fresh resolution, no
@@ -38,8 +47,12 @@ jobs:
       fail-fast: false
       matrix:
         python-version: ["3.10", "3.13", "3.14"]
+    env:
+      UV_PYTHON: ${{ matrix.python-version }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
       - name: Stub the Apple Books databases
         run: |
@@ -48,5 +61,20 @@ jobs:
           touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
       # Like the release build: sdist first, then the wheel from the sdist.
       - run: uv build
-      - run: uvx --refresh --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp --version
-      - run: python3 scripts/smoke_test.py uvx --refresh --python ${{ matrix.python-version }} --from dist/*.whl apple-books-mcp
+      - run: uvx --refresh --from dist/*.whl apple-books-mcp --version
+      - run: python3 scripts/smoke_test.py uvx --refresh --from dist/*.whl apple-books-mcp
+
+  mcpb:
+    # Builds the Claude Desktop extension like the release does (the
+    # official packer validates the manifest) and installs it the way
+    # Claude Desktop does: uv sync in the unpacked bundle, then the
+    # manifest's command.
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
+      - run: python3 scripts/build_mcpb.py --smoke mcpb-dist/*.mcpb
+
