@@ -75,6 +75,7 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - run: npm ci --ignore-scripts --no-audit --no-fund --prefix mcpb
       - run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
       - run: python3 scripts/build_mcpb.py --smoke mcpb-dist/*.mcpb
 

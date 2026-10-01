@@ -24,7 +24,9 @@ pyproject.toml and uv.lock (the tested dependency set), and starts the
 server from mcp_config. No Python interpreter or packages are bundled.
 
 Building needs the project's dependencies importable (to list the
-tools) and Node.js (for npx); --check-tag needs only Python.
+tools) and the official packer, installed from mcpb/package-lock.json
+with `npm ci --ignore-scripts --prefix mcpb`; --check-tag needs only
+Python.
 """
 import argparse
 import asyncio
@@ -43,9 +45,11 @@ ROOT = Path(__file__).resolve().parent.parent
 TEMPLATE = ROOT / "mcpb" / "manifest.json"
 SERVER_JSON = ROOT / "server.json"
 
-# The official packer (https://github.com/modelcontextprotocol/mcpb),
-# pinned so a new release can't change what gets shipped.
-MCPB_CLI = "@anthropic-ai/mcpb@2.1.2"
+# The official packer (https://github.com/modelcontextprotocol/mcpb).
+# mcpb/package-lock.json pins it and its whole dependency tree by hash,
+# so a new release of any of them can't change what gets shipped, and
+# build() checks the packed bundle against the staged files.
+PACKER = ROOT / "mcpb" / "node_modules" / ".bin" / "mcpb"
 
 # What goes into the bundle: enough for `uv sync` to install the
 # project from source with the locked dependencies. Not .python-version
@@ -191,11 +195,25 @@ def release_server_json(version: str, bundle: Path) -> dict:
     return server
 
 
-def _npx(*args: str) -> None:
-    npx = shutil.which("npx")
-    if npx is None:
-        raise SystemExit("npx not found: building the bundle needs Node.js.")
-    subprocess.run([npx, "--yes", MCPB_CLI, *args], check=True)
+def _mcpb(*args: str) -> None:
+    if not PACKER.exists():
+        raise SystemExit("The MCPB packer isn't installed: "
+                         "run `npm ci --ignore-scripts --prefix mcpb` (needs Node.js).")
+    subprocess.run([str(PACKER), *args], check=True)
+
+
+def check_packed(bundle: Path, staged: Path) -> None:
+    """Fail unless ``bundle`` holds exactly the staged files, byte for
+    byte: nothing the packer adds, drops or changes gets shipped."""
+    with zipfile.ZipFile(bundle) as archive:
+        packed = {info.filename: archive.read(info) for info in archive.infolist()
+                  if not info.is_dir()}
+    expected = {p.relative_to(staged).as_posix(): p.read_bytes()
+                for p in staged.rglob("*") if p.is_file()}
+    differ = sorted(name for name in packed.keys() | expected.keys()
+                    if packed.get(name) != expected.get(name))
+    if differ:
+        raise SystemExit(f"{bundle.name} doesn't match the staged files: {', '.join(differ)}")
 
 
 def build(out: Path) -> Path:
@@ -206,7 +224,8 @@ def build(out: Path) -> Path:
     with tempfile.TemporaryDirectory() as tmp:
         staged = stage(Path(tmp) / "apple-books-mcp", manifest)
         # pack validates the manifest against the schema first.
-        _npx("pack", str(staged), str(bundle))
+        _mcpb("pack", str(staged), str(bundle))
+        check_packed(bundle, staged)
     server_json = out / "server.json"
     server_json.write_text(json.dumps(release_server_json(version, bundle), indent=2) + "\n",
                            encoding="utf-8")
