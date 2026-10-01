@@ -1,7 +1,12 @@
 import pytest
 from datetime import datetime
 from unittest.mock import patch
+from mcp.server.fastmcp.exceptions import ToolError
 from py_apple_books import LibraryStats
+from py_apple_books.exceptions import (
+    AnnotationNotFoundError,
+    BookNotFoundError,
+)
 from py_apple_books.models.location import Location
 from apple_books_mcp.server import (
     list_all_collections, get_collection_books, describe_collection,
@@ -30,9 +35,15 @@ class MockResults(list):
         return len(self)
 
 
+# Ids are integers, as in the library (Z_PK).
+BOOK_ID = 1
+ANNO_ID = 11
+COLLECTION_ID = 21
+
+
 class MockBook:
     def __init__(self):
-        self.id = "book1"
+        self.id = BOOK_ID
         self.title = "Book 1"
         self.author = "Author 1"
         self.annotations = MockResults()
@@ -50,7 +61,7 @@ class MockBook:
 
     @property
     def __dict__(self):
-        return {"id": "book1", "title": "Book 1"}
+        return {"id": BOOK_ID, "title": "Book 1"}
 
 
 class MockLocation:
@@ -74,7 +85,7 @@ class MockLocation:
 
 class MockAnnotation:
     def __init__(self):
-        self.id = "anno1"
+        self.id = ANNO_ID
         self.selected_text = "Test text"
         self.representative_text = "Test text"
 
@@ -95,12 +106,12 @@ class MockAnnotation:
 
     @property
     def __dict__(self):
-        return {"id": "anno1", "text": "Test text"}
+        return {"id": ANNO_ID, "text": "Test text"}
 
 
 class MockCollection:
     def __init__(self):
-        self.id = "col1"
+        self.id = COLLECTION_ID
         self.title = "Collection 1"
         self.details = ""
         self._books = [MockBook()]
@@ -146,7 +157,7 @@ def mock_apple_books():
         mock.get_library_stats.return_value = LibraryStats(
             total_books=1, finished_books=0, in_progress_books=1,
             unstarted_books=0, total_annotations=1, orphan_annotations=0,
-            annotations_per_book=(("book1", "Book 1", 1),),
+            annotations_per_book=((BOOK_ID, "Book 1", 1),),
         )
 
         # Collection write methods (v0.8.0)
@@ -172,15 +183,17 @@ def test_list_all_collections(mock_apple_books):
 
 
 def test_get_collection_books(mock_apple_books):
-    result = get_collection_books("col1")
+    result = get_collection_books(COLLECTION_ID)
     assert "Book 1" in result.text
-    mock_apple_books.get_collection_by_id.assert_called_once_with("col1")
+    mock_apple_books.get_collection_by_id.assert_called_once_with(COLLECTION_ID)
 
 
 def test_describe_collection(mock_apple_books):
-    result = describe_collection("col1")
+    # 0.8 typed this id as a string; a numeric string still works and
+    # reaches the library as an int.
+    result = describe_collection(str(COLLECTION_ID))
     assert isinstance(result.text, str)
-    mock_apple_books.get_collection_by_id.assert_called_once_with("col1")
+    mock_apple_books.get_collection_by_id.assert_called_once_with(COLLECTION_ID)
 
 
 def test_list_all_books(mock_apple_books):
@@ -190,16 +203,23 @@ def test_list_all_books(mock_apple_books):
 
 
 def test_describe_book(mock_apple_books):
-    result = describe_book("book1")
-    assert "book1" in result.text
-    mock_apple_books.get_book_by_id.assert_called_once_with("book1")
+    result = describe_book(str(BOOK_ID))
+    assert f"Book id: {BOOK_ID}" in result.text
+    mock_apple_books.get_book_by_id.assert_called_once_with(BOOK_ID)
+
+
+@pytest.mark.parametrize("bad", ["book1", "", "1.5", None])
+def test_non_numeric_id_is_a_clear_error(mock_apple_books, bad):
+    with pytest.raises(ToolError, match=r"book_id must be a numeric id"):
+        describe_book(bad)
+    mock_apple_books.get_book_by_id.assert_not_called()
 
 
 def test_list_all_annotations(mock_apple_books):
     result = list_all_annotations()
     # New in v0.7.0: lean grouped-by-book output — id + chapter,
     # no selected_text body. Surrounding text is a follow-up call.
-    assert "[anno1]" in result.text
+    assert f"[{ANNO_ID}]" in result.text
     assert "Book 1" in result.text
     # Ordering defaults to recent-first so heavily-deleted old books
     # (orphan asset_ids) don't dominate the top of the listing.
@@ -209,14 +229,14 @@ def test_list_all_annotations(mock_apple_books):
 
 
 def test_list_annotations_by_book(mock_apple_books):
-    result = list_annotations("book1")
+    result = list_annotations(BOOK_ID)
     # Book-scoped listing: no book name per row (caller passed book_id),
     # just the annotation id and chapter.
-    assert "[anno1]" in result.text
+    assert f"[{ANNO_ID}]" in result.text
     # The book name should NOT repeat in each row — that's the whole
     # point of taking book_id as an argument.
     assert "Book 1" not in result.text
-    mock_apple_books.get_book_by_id.assert_called_with("book1")
+    mock_apple_books.get_book_by_id.assert_called_with(BOOK_ID)
 
 
 def test_list_annotations_empty_for_book_with_none(mock_apple_books):
@@ -224,14 +244,22 @@ def test_list_annotations_empty_for_book_with_none(mock_apple_books):
     # message instead of empty output.
     book = mock_apple_books.get_book_by_id.return_value
     book.annotations = MockResults()
-    result = list_annotations("book1")
+    result = list_annotations(BOOK_ID)
+    # An empty result is a normal answer, not an error.
     assert "No annotations" in result.text
 
 
 def test_list_annotations_unknown_book(mock_apple_books):
-    mock_apple_books.get_book_by_id.side_effect = IndexError()
-    result = list_annotations("99999")
-    assert "No book found" in result.text
+    mock_apple_books.get_book_by_id.side_effect = BookNotFoundError(
+        "No book with id 99999."
+    )
+    with pytest.raises(ToolError) as raised:
+        list_annotations("99999")
+    assert str(raised.value) == (
+        "No book with id 99999. Use search_books_by_title or list_all_books "
+        "to find book ids."
+    )
+    mock_apple_books.get_book_by_id.assert_called_once_with(99999)
 
 
 def test_get_highlights_by_color(mock_apple_books):
@@ -329,18 +357,18 @@ def test_limit_parameter(mock_apple_books):
     books = []
     for i in range(8):
         book = MockBook()
-        book.id = f"book{i}"
+        book.id = 100 + i
         books.append(book)
     mock_apple_books.list_books.return_value = MockResults(books)
     mock_apple_books.get_books_in_progress.return_value = MockResults(books)
 
     result = list_all_books(limit=5)
-    assert "[book4]" in result.text and "[book5]" not in result.text
+    assert "[104]" in result.text and "[105]" not in result.text
     assert "Showing 1–5 of 8 books. Next page: offset=5." in result.text
 
     result = get_books_in_progress(limit=2, offset=6)
-    assert "[book6]" in result.text and "[book7]" in result.text
-    assert "[book5]" not in result.text
+    assert "[106]" in result.text and "[107]" in result.text
+    assert "[105]" not in result.text
     assert "Showing 7–8 of 8 books (end)." in result.text
 
     recent_annotations(limit=3)
@@ -370,7 +398,7 @@ def test_annotation_output_includes_date(mock_apple_books):
     (local time) so Claude can cluster annotations into reading
     sessions."""
     result = recent_annotations()
-    assert result.text.startswith("2026-04-16 14:23 [anno1]")
+    assert result.text.startswith(f"2026-04-16 14:23 [{ANNO_ID}]")
 
 
 def test_get_annotations_by_date_range(mock_apple_books):
@@ -393,9 +421,9 @@ def test_get_annotations_by_date_range_after_only(mock_apple_books):
 
 
 def test_describe_annotation(mock_apple_books):
-    result = describe_annotation("anno1")
-    assert "anno1" in result.text
-    mock_apple_books.get_annotation_by_id.assert_called_once_with("anno1")
+    result = describe_annotation(str(ANNO_ID))
+    assert f"Annotation {ANNO_ID}" in result.text
+    mock_apple_books.get_annotation_by_id.assert_called_once_with(ANNO_ID)
 
 
 def test_get_annotation_context_marks_highlight(mock_apple_books):
@@ -417,15 +445,17 @@ def test_get_annotation_context_empty_degrades(mock_apple_books):
     # Drop the location so the reason is the missing-chapter-hint path.
     anno = mock_apple_books.get_annotation_by_id.return_value
     anno.location = None
-    result = get_annotation_context(1)
-    assert "No surrounding context available" in result.text
-    assert "CFI" in result.text
+    with pytest.raises(ToolError, match="No surrounding context available") as raised:
+        get_annotation_context(1)
+    assert "CFI" in str(raised.value)
 
 
 def test_get_annotation_context_unknown_id(mock_apple_books):
-    mock_apple_books.get_annotation_by_id.side_effect = IndexError()
-    result = get_annotation_context(99999)
-    assert "No annotation found with id 99999" in result.text
+    mock_apple_books.get_annotation_by_id.side_effect = AnnotationNotFoundError(
+        "No annotation with id 99999."
+    )
+    with pytest.raises(ToolError, match="No annotation with id 99999. Annotation ids"):
+        get_annotation_context(99999)
 
 
 def test_currently_reading_resource_registered():
@@ -452,7 +482,7 @@ def test_currently_reading_resource_content(mock_apple_books):
     # Metadata + ids — still present.
     assert "Currently Reading: Book 1 by Author 1" in content
     assert "In Progress" in content
-    assert "Book id: book1" in content
+    assert f"Book id: {BOOK_ID}" in content
     # Annotation count is shown, but the highlight bodies are NOT.
     assert "Highlights in this book: 1" in content
     assert "Test text" not in content  # the annotation body stays out
@@ -481,7 +511,7 @@ def test_get_library_stats(mock_apple_books):
     assert "Total books: 1" in result.text
     assert "Total annotations: 1" in result.text
     assert "Most annotated books:" in result.text
-    assert "[book1] Book 1: 1" in result.text
+    assert f"[{BOOK_ID}] Book 1: 1" in result.text
     # Counted by the library in SQL; no book or annotation is loaded.
     mock_apple_books.get_library_stats.assert_called_once_with()
     mock_apple_books.list_books.assert_not_called()
@@ -498,31 +528,31 @@ def test_list_all_books_uses_bracketed_id_format(mock_apple_books):
     Claude can hand off to describe_book / list_annotations without a
     second lookup. The old raw ``ID:\\nTitle:\\n...`` block is gone."""
     result = list_all_books()
-    assert "[book1] Book 1 by Author 1" in result.text
+    assert f"[{BOOK_ID}] Book 1 by Author 1" in result.text
     assert "Description: None" not in result.text  # old format gone
 
 
 def test_search_books_by_title_uses_bracketed_id_format(mock_apple_books):
     result = search_books_by_title("Book")
-    assert "[book1] Book 1 by Author 1" in result.text
+    assert f"[{BOOK_ID}] Book 1 by Author 1" in result.text
 
 
 def test_get_books_by_genre_includes_book_id(mock_apple_books):
     """v0.7.1: genre output must include [id] for hand-off."""
     result = get_books_by_genre("Romance")
-    assert "[book1]" in result.text
+    assert f"[{BOOK_ID}]" in result.text
     assert "Romance" in result.text
 
 
 def test_list_all_collections_uses_bracketed_id_format(mock_apple_books):
     result = list_all_collections()
-    assert "[col1] Collection 1" in result.text
+    assert f"[{COLLECTION_ID}] Collection 1" in result.text
     assert "Details: None" not in result.text
 
 
 def test_search_collections_by_title_uses_bracketed_id_format(mock_apple_books):
     result = search_collections_by_title("Collection")
-    assert "[col1] Collection 1" in result.text
+    assert f"[{COLLECTION_ID}] Collection 1" in result.text
 
 
 def test_get_collection_books_omits_description(mock_apple_books):
@@ -535,8 +565,8 @@ def test_get_collection_books_omits_description(mock_apple_books):
         "A VERY LONG MARKETING BLURB that should not appear in the output. "
         * 50
     )
-    result = get_collection_books("col1")
-    assert "[book1] Book 1 by Author 1" in result.text
+    result = get_collection_books(COLLECTION_ID)
+    assert f"[{BOOK_ID}] Book 1 by Author 1" in result.text
     assert "MARKETING BLURB" not in result.text
 
 
@@ -546,8 +576,8 @@ def test_reading_status_rows_include_book_id(mock_apple_books):
     for fn in (get_books_in_progress, get_finished_books,
                get_unstarted_books, get_recently_read_books):
         result = fn()
-        assert "[book1]" in result.text, (
-            f"{fn.__name__} missing [book1] id in row"
+        assert f"[{BOOK_ID}]" in result.text, (
+            f"{fn.__name__} missing [{BOOK_ID}] id in row"
         )
         assert "Book 1 by Author 1" in result.text
 
@@ -610,7 +640,7 @@ def test_library_stats_separates_orphan_annotations(mock_apple_books):
     mock_apple_books.get_library_stats.return_value = LibraryStats(
         total_books=1, finished_books=0, in_progress_books=1,
         unstarted_books=0, total_annotations=2, orphan_annotations=1,
-        annotations_per_book=(("book1", "Book 1", 1),),
+        annotations_per_book=((BOOK_ID, "Book 1", 1),),
     )
 
     result = get_library_stats()
@@ -628,8 +658,8 @@ def test_library_stats_separates_orphan_annotations(mock_apple_books):
 
 
 def test_write_tools_disabled_by_default(mock_apple_books, monkeypatch):
-    """Without --enable-writes, every write tool refuses with enable
-    instructions and never calls the backend."""
+    """Without --enable-writes, every write tool refuses (an error)
+    with enable instructions and never calls the backend."""
     monkeypatch.delenv("APPLE_BOOKS_MCP_ENABLE_WRITES", raising=False)
     for fn, args in [
         (create_collection, ("X",)),
@@ -638,8 +668,8 @@ def test_write_tools_disabled_by_default(mock_apple_books, monkeypatch):
         (add_book_to_collection, (9, 1)),
         (remove_book_from_collection, (9, 1)),
     ]:
-        result = fn(*args)
-        assert "--enable-writes" in result.text, fn.__name__
+        with pytest.raises(ToolError, match="--enable-writes"):
+            fn(*args)
     mock_apple_books.create_collection.assert_not_called()
     mock_apple_books.delete_collection.assert_not_called()
 
@@ -693,8 +723,8 @@ def test_remove_book_not_present(mock_apple_books, writes_enabled):
 def test_write_blocked_while_books_running(mock_apple_books, writes_enabled):
     from py_apple_books.exceptions import BooksAppRunningError
     mock_apple_books.create_collection.side_effect = BooksAppRunningError("Books is running")
-    result = create_collection("X")
-    assert "quit Books" in result.text
+    with pytest.raises(ToolError, match="quit Books"):
+        create_collection("X")
 
 
 def test_write_system_collection_refused(mock_apple_books, writes_enabled):
@@ -702,8 +732,8 @@ def test_write_system_collection_refused(mock_apple_books, writes_enabled):
     mock_apple_books.rename_collection.side_effect = SystemCollectionError(
         "'Books' is not a user-created collection"
     )
-    result = rename_collection(3, "Nope")
-    assert "not a user-created collection" in result.text
+    with pytest.raises(ToolError, match="not a user-created collection"):
+        rename_collection(3, "Nope")
 
 
 def test_write_schema_drift_aborts_cleanly(mock_apple_books, writes_enabled):
@@ -711,9 +741,10 @@ def test_write_schema_drift_aborts_cleanly(mock_apple_books, writes_enabled):
     mock_apple_books.create_collection.side_effect = SchemaValidationError(
         "Table ZBKCOLLECTION is missing expected column(s)."
     )
-    result = create_collection("X")
-    assert "aborted for safety" in result.text
-    assert "No changes were made" in result.text
+    with pytest.raises(ToolError) as raised:
+        create_collection("X")
+    assert "aborted for safety" in str(raised.value)
+    assert "No changes were made" in str(raised.value)
 
 
 def test_write_collection_not_found(mock_apple_books, writes_enabled):
@@ -723,5 +754,5 @@ def test_write_collection_not_found(mock_apple_books, writes_enabled):
     )
     # delete fetches the collection first; make that succeed so the
     # writer error is what surfaces
-    result = delete_collection(99)
-    assert "No collection with id 99" in result.text
+    with pytest.raises(ToolError, match="No collection with id 99"):
+        delete_collection(99)
