@@ -102,10 +102,52 @@ def _get_book_title(annotation) -> str:
 # Untrusted book text
 # --------------------------------------------------------------------------
 
-# A ``<book_text`` or ``</book_text`` tag, in any case, with optional
-# whitespace (zero-width characters included) around the slash.
+# Characters a crafted book could hide inside a ``</book_text>`` tag:
+# whitespace, the default-ignorable characters (zero-width spaces and
+# joiners, soft hyphen, direction marks, variation selectors, Hangul
+# fillers, Unicode tags) and combining marks.
+_HIDDEN = (
+    r"[\s\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f"
+    r"\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff"
+    r"\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
+    r"\U000e0000-\U000e0fff"
+    r"\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]*"
+)
+
+
+def _tag_lookalikes() -> dict:
+    """A ``str.translate`` table from look-alikes of the tag's
+    characters to the characters: fullwidth forms, and the angle
+    brackets, slashes, dashes and Cyrillic or Greek letters that pass
+    for ``<``, ``/``, ``_`` and ``booktext``. One character maps to
+    one, so a match in the translated copy is at the same index in the
+    text."""
+    table = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+    for lookalikes, char in (
+        ("\ufe64\u2039\u2329\u3008\u27e8", "<"),
+        ("\u2215\u2044\u29f8", "/"),
+        ("\u2010\u2011\u2012\u2013\u2014\u2212\ufe63", "-"),
+        ("\ufe4d\ufe4e\ufe4f", "_"),
+        ("\u0412\u0392\u042c\u044c", "b"),
+        ("\u043e\u041e\u03bf\u039f", "o"),
+        ("\u043a\u041a\u03ba\u039a", "k"),
+        ("\u0442\u0422\u03c4\u03a4", "t"),
+        ("\u0435\u0415\u0395", "e"),
+        ("\u0445\u0425\u03c7\u03a7\u00d7", "x"),
+    ):
+        table.update(dict.fromkeys(map(ord, lookalikes), char))
+    return table
+
+
+_TAG_LOOKALIKES = _tag_lookalikes()
+
+# The ``<`` of a ``<book_text`` or ``</book_text`` tag, in any case, with
+# hidden characters anywhere in it and an optional ``_`` or ``-``. Each
+# run of hidden characters is followed by a character that can't be one,
+# so the match is linear in the length of the text.
 _BOOK_TEXT_TAG = re.compile(
-    r"<(?=[\s​-‍⁠﻿]*/?[\s​-‍⁠﻿]*book_text)",
+    f"<(?={_HIDDEN}(?:/{_HIDDEN})?{_HIDDEN.join('book')}{_HIDDEN}"
+    f"(?:[_-]{_HIDDEN})?{_HIDDEN.join('text')})",
     re.IGNORECASE,
 )
 
@@ -116,17 +158,21 @@ def _book_text(text: str, **attrs) -> str:
     server instructions tell the model that what's inside is untrusted
     content, never instructions.
 
-    A ``book_text`` tag inside ``text`` gets its ``<`` escaped, so a
-    crafted book can't close the envelope early. ``attrs`` (None
-    values skipped) become quoted attributes that say where the text
-    came from.
+    A ``book_text`` tag inside ``text``, or a look-alike of one, gets
+    its ``<`` escaped, so a crafted book can't close the envelope
+    early. ``attrs`` (None values skipped) become quoted attributes
+    that say where the text came from.
     """
     attributes = "".join(
         f' {name}="{html.escape(str(value), quote=True)}"'
         for name, value in attrs.items()
         if value is not None
     )
-    body = _BOOK_TEXT_TAG.sub("&lt;", text)
+    pieces, end = [], 0
+    for tag in _BOOK_TEXT_TAG.finditer(text.translate(_TAG_LOOKALIKES)):
+        pieces += [text[end:tag.start()], "&lt;"]
+        end = tag.start() + 1
+    body = "".join(pieces) + text[end:]
     return f"<book_text{attributes}>\n{body}\n</book_text>"
 
 
