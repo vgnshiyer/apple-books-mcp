@@ -9,6 +9,15 @@ __version__ = "0.8.4"
 
 logger = logging.getLogger("apple-books-mcp")
 
+ENV_ENABLE_WRITES = "APPLE_BOOKS_MCP_ENABLE_WRITES"
+
+
+def _writes_from_env() -> bool:
+    """APPLE_BOOKS_MCP_ENABLE_WRITES as set by --enable-writes ("1") or by
+    a client's boolean setting (Claude Desktop's extension sends "true")."""
+    value = os.environ.get(ENV_ENABLE_WRITES, "")
+    return value.strip().lower() in ("1", "true", "yes")
+
 
 def _dist_version(name: str) -> str:
     try:
@@ -88,7 +97,7 @@ def _configure_logging(verbose: int) -> None:
 def main(verbose: int, enable_writes: bool, doctor: bool) -> None:
     """Apple Books MCP Server"""
     if enable_writes:
-        os.environ["APPLE_BOOKS_MCP_ENABLE_WRITES"] = "1"
+        os.environ[ENV_ENABLE_WRITES] = "1"
 
     if doctor:
         from apple_books_mcp import doctor as _doctor
@@ -102,7 +111,7 @@ def main(verbose: int, enable_writes: bool, doctor: bool) -> None:
     from apple_books_mcp.server import mcp, serve
 
     _configure_logging(verbose)
-    writes = os.environ.get("APPLE_BOOKS_MCP_ENABLE_WRITES") == "1"
+    writes = _writes_from_env()
     logger.info(
         "%s, collection writes %s",
         _version_text(),

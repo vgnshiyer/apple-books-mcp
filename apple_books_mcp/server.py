@@ -31,6 +31,7 @@ from py_apple_books.exceptions import (
     WriteError,
 )
 
+from apple_books_mcp import _writes_from_env
 from apple_books_mcp.utils import (
     _ANNOTATION_PAGE,
     _BOOK_PAGE,
@@ -429,8 +430,10 @@ _WRITES_DISABLED_MSG = (
     "Collection editing is disabled. To enable it, add \"--enable-writes\" "
     "to this server's args in your Claude Desktop config, e.g.\n\n"
     '  "args": ["apple-books-mcp", "--enable-writes"]\n\n'
-    "then restart Claude Desktop. Writes always refuse while Books is "
-    "open, and every change takes an automatic backup first."
+    "then restart Claude Desktop. If you installed the Apple Books "
+    "extension, turn on \"Allow editing collections\" in its settings "
+    "instead. Writes always refuse while Books is open, and every change "
+    "takes an automatic backup first."
 )
 
 _ICLOUD_CAVEAT = (
@@ -440,7 +443,7 @@ _ICLOUD_CAVEAT = (
 
 
 def _writes_enabled() -> bool:
-    return os.environ.get("APPLE_BOOKS_MCP_ENABLE_WRITES") == "1"
+    return _writes_from_env()
 
 
 def _require_writes() -> None:

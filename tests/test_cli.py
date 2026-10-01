@@ -65,6 +65,17 @@ def test_version_matches_pyproject_and_server_json():
     assert server_json["packages"][0]["version"] == apple_books_mcp.__version__
 
 
+@pytest.mark.parametrize("value, enabled", [
+    ("1", True), ("true", True), (" TRUE ", True), ("yes", True),
+    ("", False), ("0", False), ("false", False), ("no", False), ("on", False),
+])
+def test_writes_env_values(monkeypatch, value, enabled):
+    """--enable-writes sets "1"; the Desktop extension's checkbox sends
+    "true" or "false"."""
+    monkeypatch.setenv(apple_books_mcp.ENV_ENABLE_WRITES, value)
+    assert apple_books_mcp._writes_from_env() is enabled
+
+
 def test_version_flag():
     result = _run(["-m", "apple_books_mcp", "--version"])
     assert result.returncode == 0, result.stderr

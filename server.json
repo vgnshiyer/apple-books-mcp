@@ -33,6 +33,12 @@
           "format": "filepath"
         },
         {
+          "name": "APPLE_BOOKS_MCP_THREADS",
+          "description": "How many tool calls may run at once (default 8; 0 runs them one at a time on the event loop).",
+          "format": "number",
+          "default": "8"
+        },
+        {
           "name": "APPLE_BOOKS_QUERY_TIMEOUT",
           "description": "Seconds a library query may run before it is stopped (default 30; 0 for no limit).",
           "format": "number",

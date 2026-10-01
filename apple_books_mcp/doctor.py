@@ -13,9 +13,8 @@ import platform
 import sys
 import time
 
-from apple_books_mcp import _dist_version, _version_text
+from apple_books_mcp import ENV_ENABLE_WRITES, _dist_version, _version_text, _writes_from_env
 
-ENV_ENABLE_WRITES = "APPLE_BOOKS_MCP_ENABLE_WRITES"
 # py-apple-books' location and timeout variables (py_apple_books.db.client).
 _LIBRARY_ENV = ("APPLE_BOOKS_DATA_DIR", "APPLE_BOOKS_LIBRARY_DB", "APPLE_BOOKS_ANNOTATION_DB")
 _TIMEOUT_ENV = "APPLE_BOOKS_QUERY_TIMEOUT"
@@ -253,7 +252,7 @@ def run(out=None) -> int:
     """Run every check, print the report to ``out`` (stdout) and return
     the exit status: 1 if a check failed, else 0."""
     out = sys.stdout if out is None else out
-    writes = os.environ.get(ENV_ENABLE_WRITES) == "1"
+    writes = _writes_from_env()
     report = _Report(out)
     print(_version_text(), file=out)
 
