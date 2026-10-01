@@ -11,7 +11,15 @@ resolution-markers = [
 ]
 
 [manifest]
-build-constraints = [{ name = "hatchling", specifier = "==1.32.4" }]
+build-constraints = [
+    { name = "hatchling", specifier = "==1.32.4" },
+    { name = "packaging", specifier = "==26.3" },
+    { name = "pathspec", specifier = "==1.1.1" },
+    { name = "pluggy", specifier = "==1.6.0" },
+    { name = "tomli", specifier = "==2.4.1" },
+    { name = "tomlkit", specifier = "==0.15.1" },
+    { name = "trove-classifiers", specifier = "==2026.9.21.13" },
+]
 
 [[package]]
 name = "annotated-types"
@@ -55,7 +63,7 @@ dev = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.1.8" },
-    { name = "mcp", specifier = ">=1.10.0,<2" },
+    { name = "mcp", specifier = ">=1.12.0,<2" },
     { name = "py-apple-books", specifier = ">=1.10,<2" },
     { name = "pydantic", specifier = ">=2.7.2,<3" },
 ]

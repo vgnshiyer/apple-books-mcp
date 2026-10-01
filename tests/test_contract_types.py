@@ -9,7 +9,6 @@ import asyncio
 from unittest.mock import patch
 
 import pytest
-from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 from mcp.shared.memory import create_connected_server_and_client_session
 from py_apple_books import PyAppleBooks
 from py_apple_books.testing import FixtureLibrary, write_epub
@@ -257,15 +256,6 @@ def test_a_fractional_or_null_id_gets_a_clear_error(library, value, shown):
         f"book_id must be a numeric id, like the 175 in \"[175] Title\", not {shown}.")
 
 
-def _plain_strings_kept():
-    """mcp 1.10 JSON-decodes every string argument; later 1.x keep a
-    str parameter's value as sent."""
-    def probe(text: str): ...
-    return func_metadata(probe).pre_parse_json({"text": "[1]"}) == {"text": "[1]"}
-
-
-@pytest.mark.skipif(not _plain_strings_kept(),
-                    reason="this mcp JSON-decodes every string argument")
 @pytest.mark.parametrize("details", ['["to read", "maybe"]', '{"a": 1}', "null", "5", None])
 def test_details_are_passed_on_as_given(monkeypatch, details):
     """0.8 passed details on verbatim; a JSON-looking string is not

@@ -22,8 +22,10 @@ dependencies = [
     "click>=8.1.8",
     # The server is written against the mcp 1.x FastMCP API
     # (mcp.server.fastmcp), which mcp 2.x removed. 1.10 is the first
-    # release whose tools take a title (and protocol 2025-06-18).
-    "mcp>=1.10.0,<2",
+    # release whose tools take a title (and protocol 2025-06-18); before
+    # 1.12, FastMCP JSON-decodes string arguments, so a collection
+    # description like "123" would not arrive as written.
+    "mcp>=1.12.0,<2",
     "py-apple-books>=1.10,<2",
     # Imported directly for the tool parameter types; mcp 1.x requires
     # the same range.
@@ -47,7 +49,15 @@ dev = [
 # Pins the build backend in uv.lock, so the Claude Desktop extension's
 # `uv sync` builds with the audited hatchling rather than whatever PyPI
 # has that day.
-build-constraint-dependencies = ["hatchling==1.32.4"]
+build-constraint-dependencies = [
+    "hatchling==1.32.4",
+    "packaging==26.3",
+    "pathspec==1.1.1",
+    "pluggy==1.6.0",
+    "tomli==2.4.1",
+    "tomlkit==0.15.1",
+    "trove-classifiers==2026.9.21.13",
+]
 
 [project.scripts]
 apple-books-mcp = "apple_books_mcp:main"

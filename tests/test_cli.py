@@ -57,6 +57,7 @@ def _handshake(flags):
     )
 
 
+@pytest.mark.skipif(not (REPO_ROOT / "server.json").exists(), reason="not in the sdist")
 def test_version_matches_pyproject_and_server_json():
     pyproject = (REPO_ROOT / "pyproject.toml").read_text()
     assert re.search(r'^version = "(.+)"$', pyproject, re.M)[1] == apple_books_mcp.__version__
