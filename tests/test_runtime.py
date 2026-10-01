@@ -263,6 +263,20 @@ def test_default_deadline_is_the_library_query_timeout(monkeypatch):
     assert seen == [default_library().query_timeout]
 
 
+def test_every_server_tool_moves(monkeypatch):
+    # A tool written as ``async def`` (or wrapped in one) would stay on the
+    # event loop and block it again: the server's tools must be plain
+    # functions.
+    from apple_books_mcp.server import mcp
+
+    tools = mcp._tool_manager.list_tools()
+    for item in tools + mcp._resource_manager.list_resources():
+        for name in ("fn", "is_async"):
+            if hasattr(item, name):
+                monkeypatch.setattr(item, name, getattr(item, name))
+    assert _runtime.install(mcp, threads=2, deadline=None) == len(tools)
+
+
 # -- over stdio ---------------------------------------------------------------
 
 
