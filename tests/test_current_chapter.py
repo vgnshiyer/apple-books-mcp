@@ -76,15 +76,27 @@ def test_a_chapter_named_current_wins(library, tmp_path):
 
 
 def test_current_without_a_reading_position(library, epub):
+    """No reading position: the most recent highlight's chapter, as
+    get_current_reading_position and the currently-reading resource
+    infer it, and said so."""
     book = library.add_book("Readable", path=epub)
-    # A highlight is not a reading position.
     library.add_annotation(book, "First chapter", location="epubcfi(/6/4[c1]!/4/2/1:0)")
+    text = get_chapter_content(book["id"]).text
+    assert "First chapter text." in text
+    assert text.endswith(
+        '\n(chapter_id "current" read chapter c1, from your most recent highlight; '
+        "Apple Books hasn't recorded a reading position.)")
+    assert "c1" in server.get_current_reading_position(book["id"]).text
+
+
+def test_current_without_a_position_or_highlights(library, epub):
+    book = library.add_book("Readable", path=epub)
     with pytest.raises(ToolError) as raised:
         get_chapter_content(book["id"])
     assert str(raised.value) == (
-        "Apple Books has no reading position for this book yet, so there is no "
-        f"current chapter. list_book_chapters({book['id']}) lists its chapters; "
-        "pass one's id as chapter_id.")
+        "Apple Books has no reading position and no highlights for this book yet, so "
+        f"there is no current chapter. list_book_chapters({book['id']}) lists its "
+        "chapters; pass one's id as chapter_id.")
 
 
 def test_current_in_a_file_the_toc_skips(library, tmp_path):

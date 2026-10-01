@@ -72,6 +72,15 @@ def test_title_or_author(library):
     )
 
 
+def test_rows_are_in_id_order(library, monkeypatch):
+    """By book id, whatever order the library returns the books in."""
+    books = [library.add_book(f"Ordered {n}", "Orderly") for n in range(4)]
+    real = server.apple_books.list_books
+    monkeypatch.setattr(server.apple_books, "list_books",
+                        lambda *a, **k: list(reversed(list(real(*a, **k)))))
+    assert _ids(search_books("orderly").text) == [b["id"] for b in books]
+
+
 def test_matches_the_title_search(library):
     """On titles, search_books finds what search_books_by_title finds."""
     for title in ("Gödel Numbers for Cats", "Don’t Forget the Towel", "STRASSE", "Straße", "100% _odd_"):

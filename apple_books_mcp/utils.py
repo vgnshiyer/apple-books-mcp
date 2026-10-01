@@ -204,7 +204,11 @@ def _removed_book(asset_id, *, count: Optional[int] = None, short: bool = False)
         tag = None
     if short:
         return f"removed book {tag}" if tag else "removed book"
-    label = f"asset {tag}" if tag else "no asset id"
+    if tag:
+        label = f"asset {tag}"
+    else:
+        # An id that isn't plain is not shown, as in links.
+        label = "asset id not shown" if isinstance(asset_id, str) and asset_id else "no asset id"
     if count is not None:
         label += f", {count} highlight{'' if count == 1 else 's'} on this page"
     return f"Removed book ({label})"

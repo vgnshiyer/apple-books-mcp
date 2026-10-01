@@ -99,7 +99,7 @@ def test_library_stats_counts_removed_books(removed):
     ("12345", "Removed book (asset 12345)"),
     (None, "Removed book (no asset id)"),
     ("", "Removed book (no asset id)"),
-    ("odd id", "Removed book (no asset id)"),
+    ("odd id", "Removed book (asset id not shown)"),
 ])
 def test_removed_book_label(asset_id, label):
     assert _removed_book(asset_id) == label

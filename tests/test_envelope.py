@@ -284,6 +284,8 @@ def test_a_chapter_id_that_is_not_plain_gives_way_to_its_order(library, ids_epub
     # chapter_id "current" names the chapter by its order, not its id.
     current = get_chapter_content(book["id"], "current").text
     assert "More text." in current and "c 2'x\"" not in current.split("</book_text>")[1]
+    # Nor in the envelope: the id comes from the book.
+    assert current.startswith(f'<book_text book_id="{book["id"]}" chapter_id="2" offset="0">\n')
     assert current.endswith(
         '\n(chapter_id "current" read chapter 2, from your reading position.)')
 

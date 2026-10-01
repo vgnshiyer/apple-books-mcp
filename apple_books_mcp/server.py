@@ -1220,7 +1220,7 @@ def _no_context_reason(anno) -> str:
         )
     book = getattr(anno, "book", None)
     if book is None:
-        return "the book is no longer in the library."
+        return f"{_removed_book(getattr(anno, 'asset_id', None))} is no longer in the library."
     selected = (getattr(anno, "selected_text", None) or "").strip()
     if not selected and not (getattr(anno, "representative_text", None) or "").strip():
         return "the annotation has no highlighted text (it only marks a place)."
@@ -1455,14 +1455,14 @@ def get_chapter_content(
         raise ToolError("max_chars must be a positive integer.")
 
     content = _book_content(book_id)
-    current = False
+    current = inferred = False
     try:
         try:
             text = content.get_chapter(chapter_id)
         except ChapterNotFoundError:
             if not _is_current(chapter_id):
                 raise
-            chapter_id = _current_chapter_id(book_id)
+            chapter_id, inferred = _current_chapter(book_id)
             text = _current_chapter_text(content, book_id, chapter_id)
             current = True
     except ChapterNotFoundError as e:
@@ -1477,7 +1477,8 @@ def get_chapter_content(
             type="text",
             text=(
                 "(This chapter has no extractable text — likely an image-only page.)"
-                + (_current_chapter_note(content, chapter_id) if current else "")
+                + (_current_chapter_note(_current_shown(content, chapter_id), inferred)
+                   if current else "")
             ),
         )
 
@@ -1520,9 +1521,13 @@ def get_chapter_content(
             f"[{returned} chars]. End of chapter.)"
         )
 
+    shown_id = chapter_id
     if current:
-        cap_note += _current_chapter_note(content, chapter_id, more=remaining > 0)
-    body = _book_text(sliced, book_id=book_id, chapter_id=chapter_id, offset=offset)
+        # The id comes from the book; name the chapter only as the note
+        # does (a plain id or its order), in the envelope too.
+        shown_id = _current_shown(content, chapter_id)
+        cap_note += _current_chapter_note(shown_id, inferred, more=remaining > 0)
+    body = _book_text(sliced, book_id=book_id, chapter_id=shown_id, offset=offset)
     return TextContent(type="text", text=f"{body}\n\n{footer}{cap_note}")
 
 
@@ -1532,21 +1537,20 @@ def _is_current(chapter_id) -> bool:
     return isinstance(chapter_id, str) and chapter_id.strip().lower() == _CURRENT
 
 
-def _current_chapter_id(book_id: int) -> str:
-    """The chapter id on the book's reading position (Apple Books'
-    reading bookmark), which py-apple-books' get_current_reading_chapter
-    resolves to a ToC chapter; here a spine item the ToC doesn't list
-    counts too, as in get_current_reading_position. A ToolError when
-    there is no position."""
-    bookmark = apple_books.get_current_reading_location(book_id)
-    location = getattr(bookmark, "location", None) if bookmark is not None else None
-    if not location or not location.chapter_id:
+def _current_chapter(book_id: int):
+    """The chapter "current" reads, resolved as get_current_reading_position
+    and the currently-reading resource do: the reading position (a spine
+    item the ToC doesn't list counts too) or, when Apple Books recorded
+    none, the chapter of the most recent highlight. Returns
+    ``(chapter_id, inferred)``; a ToolError when there is neither."""
+    resolution = _resolve_current_chapter(apple_books, apple_books.get_book_by_id(book_id))
+    if resolution is None:
         raise ToolError(
-            "Apple Books has no reading position for this book yet, so there "
-            f"is no current chapter. list_book_chapters({book_id}) lists its "
-            "chapters; pass one's id as chapter_id."
+            "Apple Books has no reading position and no highlights for this "
+            f"book yet, so there is no current chapter. list_book_chapters({book_id}) "
+            "lists its chapters; pass one's id as chapter_id."
         )
-    return location.chapter_id
+    return resolution.chapter_id, resolution.source == "recent_highlight"
 
 
 def _current_chapter_text(content, book_id: int, chapter_id: str) -> str:
@@ -1561,11 +1565,9 @@ def _current_chapter_text(content, book_id: int, chapter_id: str) -> str:
         ) from None
 
 
-def _current_chapter_note(content, chapter_id: str, more: bool = False) -> str:
-    """Which chapter "current" read and, when there is ``more``, the id
-    to page on with, so a reading position that moves between calls
-    can't switch chapters. An id from the book that isn't a plain name
-    is shown as the chapter's order, or not at all."""
+def _current_shown(content, chapter_id: str):
+    """How output names the chapter "current" read: its id when that is
+    a plain name, else its order in the ToC, else None (not named)."""
     shown = _plain_id(chapter_id)
     if shown is None:
         try:
@@ -1574,9 +1576,20 @@ def _current_chapter_note(content, chapter_id: str, more: bool = False) -> str:
             )
         except AppleBooksError:
             shown = None
+    return shown
+
+
+def _current_chapter_note(shown, inferred: bool, more: bool = False) -> str:
+    """Which chapter "current" read (``shown``, from :func:`_current_shown`)
+    and, when there is ``more``, the id to page on with, so a reading
+    position that moves between calls can't switch chapters."""
+    source = (
+        "your most recent highlight; Apple Books hasn't recorded a reading position"
+        if inferred else "your reading position"
+    )
     if shown is None:
-        return "\n(chapter_id \"current\" read the chapter of your reading position.)"
-    note = f"\n(chapter_id \"current\" read chapter {shown}, from your reading position."
+        return f"\n(chapter_id \"current\" read the chapter of {source}.)"
+    note = f"\n(chapter_id \"current\" read chapter {shown}, from {source}."
     if more:
         note += f" Pass chapter_id=\"{shown}\" with the next offset."
     return note + ")"

@@ -338,7 +338,8 @@ def test_context_for_an_orphan(library):
         "ORPHANASSET0000000000000000000001", "gone",
         location="epubcfi(/6/4[c1]!/4/2/1:0)")
     assert _message(lambda: get_annotation_context(anno)) == (
-        "No surrounding context available: the book is no longer in the library.")
+        "No surrounding context available: Removed book (asset ORPHANAS…) is no "
+        "longer in the library.")
 
 
 def test_context_for_a_book_not_downloaded(library):
