@@ -75,13 +75,29 @@ def _configure_logging(verbose: int) -> None:
     callback=_print_version,
     help="Show the apple-books-mcp, mcp and py-apple-books versions and exit.",
 )
-def main(verbose: int, enable_writes: bool) -> None:
+@click.option(
+    "--doctor",
+    is_flag=True,
+    default=False,
+    help=(
+        "Check that the server can run here and read the Apple Books "
+        "library, print what was found and exit (1 if a check failed). "
+        "Reads only; reports counts, never titles or text."
+    ),
+)
+def main(verbose: int, enable_writes: bool, doctor: bool) -> None:
     """Apple Books MCP Server"""
     if enable_writes:
         os.environ["APPLE_BOOKS_MCP_ENABLE_WRITES"] = "1"
 
-    # Imported here so --help and --version work even when the server
-    # can't be imported (e.g. an incompatible mcp release).
+    if doctor:
+        from apple_books_mcp import doctor as _doctor
+
+        _configure_logging(verbose)
+        sys.exit(_doctor.run())
+
+    # Imported here so --help, --version and --doctor work even when the
+    # server can't be imported (e.g. an incompatible mcp release).
     from apple_books_mcp import _cancel_guard, _runtime
     from apple_books_mcp.server import mcp, serve
 
