@@ -3,7 +3,7 @@ import logging
 import os
 import re
 from datetime import date, timedelta
-from typing import Annotated, Literal, Optional, Union
+from typing import Annotated, Optional, Union
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ToolError
@@ -98,25 +98,28 @@ _MAX_CONTEXT_CHARS = 5_000
 
 
 # -- Parameter types --
-#
+
+
+def _bool_as_text(value):
+    """JSON true/false as text, which would otherwise pass as 1/0."""
+    return str(value).lower() if isinstance(value, bool) else value
+
+
 # Ids are the integer primary keys the listings print as ``[N]``. The
 # schema says integer; a numeric string is accepted too (0.8 typed
-# some ids as strings), and anything else gets _id()'s message rather
-# than a pydantic one.
-_Id = Annotated[Union[int, str], WithJsonSchema({"type": "integer"})]
-
-
-def _lowercase(value):
-    return value.strip().lower() if isinstance(value, str) else value
-
-
-# Enumerations publish an ``enum`` in the schema. Matching ignores case
-# and surrounding spaces, as 0.8 did.
-_Color = Annotated[
-    Literal["yellow", "green", "blue", "pink", "purple"],
-    BeforeValidator(_lowercase),
+# some ids as strings), and anything else, true and false included,
+# gets _id()'s message rather than a pydantic one.
+_Id = Annotated[
+    Union[int, str], BeforeValidator(_bool_as_text), WithJsonSchema({"type": "integer"})
 ]
-_Order = Annotated[Literal["newest", "oldest"], BeforeValidator(_lowercase)]
+
+# Enumerations publish an ``enum`` in the schema, but are checked by
+# the tool, so a bad value gets a short message naming the valid ones
+# (_color, _order). Matching ignores case and surrounding spaces, as
+# 0.8 did.
+_COLORS = ("yellow", "green", "blue", "pink", "purple")
+_Color = Annotated[str, WithJsonSchema({"type": "string", "enum": list(_COLORS)})]
+_Order = Annotated[str, WithJsonSchema({"type": "string", "enum": ["newest", "oldest"]})]
 
 
 def _id(name: str, value) -> int:
@@ -129,6 +132,16 @@ def _id(name: str, value) -> int:
         f"{name} must be a numeric id, like the 175 in \"[175] Title\", "
         f"not {value!r}."
     )
+
+
+def _color(color) -> str:
+    """``color`` in lower case, or a ToolError naming the colors."""
+    value = color.strip().lower() if isinstance(color, str) else color
+    if value not in _COLORS:
+        raise ToolError(
+            f"Unknown highlight color {color!r}. Valid colors: {', '.join(_COLORS)}."
+        )
+    return value
 
 
 # -- Errors --
@@ -834,6 +847,7 @@ def get_highlights_by_color(
         offset: Annotations to skip, for paging.
         order_by: ``newest`` (default) or ``oldest`` first.
     """
+    color = _color(color)
     order = _order(order_by)
     args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
     page = _query_page(
@@ -846,7 +860,7 @@ def get_highlights_by_color(
         author = getattr(book, "author", None) or "Unknown Author"
         count = len(annos)
         plural = "" if count == 1 else "s"
-        return f"{book.title} ({author}) — {count} {color.lower()} highlight{plural}:"
+        return f"{book.title} ({author}) — {count} {color} highlight{plural}:"
 
     chapter_maps: dict = {}
     text = _render_page(
@@ -857,7 +871,7 @@ def get_highlights_by_color(
             book_header=color_header,
             chapter_maps=chapter_maps,
         ),
-        noun=f"{color.lower()} highlights",
+        noun=f"{color} highlights",
         empty_message=f"No {color} highlights.",
         notes=args.notes,
     )
@@ -1299,12 +1313,9 @@ def get_chapter_content(
     if offset < 0:
         offset = 0
     if offset >= total_chars:
-        return TextContent(
-            type="text",
-            text=(
-                f"Offset {offset} is past the end of the chapter "
-                f"(total {total_chars} chars). Pass a smaller offset."
-            ),
+        raise ToolError(
+            f"Offset {offset} is past the end of the chapter "
+            f"(total {total_chars} chars). Pass a smaller offset."
         )
 
     # Slice at max_chars or the end of the chapter, whichever is first.

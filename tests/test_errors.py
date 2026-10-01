@@ -126,9 +126,15 @@ def test_annotation_not_found(api):
 
 def test_bad_choice_from_the_library(api):
     api.get_annotations_by_color.side_effect = InvalidChoiceError(
-        "Unknown highlight color 'orange'. Valid colors: green, blue, yellow, pink, purple.")
+        "Unknown highlight color 'PINK'. Valid colors: green, blue, yellow, pink, purple.")
+    assert _message(lambda: get_highlights_by_color("pink")) == (
+        "Unknown highlight color 'PINK'. Valid colors: green, blue, yellow, pink, purple.")
+
+
+def test_unknown_color_is_checked_before_the_library(api):
     assert _message(lambda: get_highlights_by_color("orange")) == (
-        "Unknown highlight color 'orange'. Valid colors: green, blue, yellow, pink, purple.")
+        "Unknown highlight color 'orange'. Valid colors: yellow, green, blue, pink, purple.")
+    api.get_annotations_by_color.assert_not_called()
 
 
 @pytest.mark.parametrize("error, message", [
@@ -169,6 +175,14 @@ def test_bad_max_chars_is_checked_before_opening_the_book(api):
     assert _message(lambda: get_chapter_content(5, "c1", max_chars=0)) == (
         "max_chars must be a positive integer.")
     api.get_book_content.assert_not_called()
+
+
+def test_offset_past_the_end_of_the_chapter(api):
+    api.get_book_content.return_value.get_chapter.return_value = "0123456789"
+    assert _message(lambda: get_chapter_content(5, "c1", offset=10)) == (
+        "Offset 10 is past the end of the chapter (total 10 chars). Pass a "
+        "smaller offset.")
+    assert get_chapter_content(5, "c1", offset=9).text.startswith("<book_text")
 
 
 @pytest.mark.parametrize("error, message", [

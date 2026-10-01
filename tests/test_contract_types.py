@@ -206,18 +206,21 @@ ID_CALLS = [
 @pytest.mark.parametrize("name, arguments", ID_CALLS)
 def test_ids_accept_ints_and_numeric_strings(library, name, arguments):
     """F26: a JSON integer and a numeric string (what 0.8 took for
-    four of these tools) give the same answer."""
+    four of these tools) give the same answer, and so does a whole
+    number like 3.0 (which 0.8's int ids took)."""
     def resolve(kind):
         return library[kind] if kind in library else kind
 
     as_int = {k: resolve(v) for k, v in arguments.items()}
     as_str = {k: str(v) for k, v in as_int.items()}
+    as_float = {k: float(v) if isinstance(v, int) else v for k, v in as_int.items()}
     is_error, text = _call(name, as_int)
     if name == "get_current_reading_position":
         # No bookmark yet: it falls back to the highlight's chapter.
         assert "c1" in text
     assert not is_error, text
     assert _call(name, as_str) == (False, text)
+    assert _call(name, as_float) == (False, text)
 
 
 @pytest.mark.parametrize("name, arguments", [
@@ -244,20 +247,43 @@ def test_a_non_numeric_id_gets_a_clear_error(library, value):
     assert "validation error" not in text
 
 
+@pytest.mark.parametrize("name, param", [
+    ("describe_book", "book_id"),
+    ("list_annotations", "book_id"),
+    ("describe_collection", "collection_id"),
+    ("get_collection_books", "collection_id"),
+    ("describe_annotation", "annotation_id"),
+])
+@pytest.mark.parametrize("value", [True, False])
+def test_true_and_false_are_not_ids(library, name, param, value):
+    """JSON true would otherwise pass as id 1 (the first collection)."""
+    is_error, text = _call(name, {param: value})
+    assert is_error
+    assert text.endswith(
+        f"{param} must be a numeric id, like the 175 in \"[175] Title\", "
+        f"not {str(value).lower()!r}.")
+
+
 def test_enumerations_ignore_case(library):
     is_error, text = _call(
         "get_highlights_by_color", {"color": " Yellow", "order_by": "OLDEST"})
     assert not is_error and "The typed highlight." in text
 
 
-@pytest.mark.parametrize("arguments, valid", [
-    ({"color": "orange"}, "'yellow', 'green', 'blue', 'pink' or 'purple'"),
-    ({"color": "underline"}, "'yellow', 'green', 'blue', 'pink' or 'purple'"),
-    ({"color": "yellow", "order_by": "sideways"}, "'newest' or 'oldest'"),
+COLORS = "Valid colors: yellow, green, blue, pink, purple."
+
+
+@pytest.mark.parametrize("arguments, message", [
+    ({"color": "orange"}, f"Unknown highlight color 'orange'. {COLORS}"),
+    ({"color": "underline"}, f"Unknown highlight color 'underline'. {COLORS}"),
+    ({"color": ""}, f"Unknown highlight color ''. {COLORS}"),
+    ({"color": "yellow", "order_by": "sideways"},
+     "order_by must be 'newest' or 'oldest', not 'sideways'."),
 ])
-def test_bad_enumeration_values_name_the_valid_ones(library, arguments, valid):
-    is_error, text = _call("get_highlights_by_color", arguments)
-    assert is_error and valid in text
+def test_bad_enumeration_values_name_the_valid_ones(library, arguments, message):
+    """F27: a short message from the tool, not pydantic's."""
+    assert _call("get_highlights_by_color", arguments) == (
+        True, f"Error executing tool get_highlights_by_color: {message}")
 
 
 def test_explicit_null_dates(library):
