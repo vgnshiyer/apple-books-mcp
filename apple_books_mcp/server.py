@@ -51,6 +51,7 @@ from apple_books_mcp.utils import (
     _format_note_row,
     _get_book_title,
     _list_page,
+    _most_recent_highlight_chapter,
     _local_zone_label,
     _order_by,
     _page_args,
@@ -1538,19 +1539,26 @@ def _is_current(chapter_id) -> bool:
 
 
 def _current_chapter(book_id: int):
-    """The chapter "current" reads, resolved as get_current_reading_position
-    and the currently-reading resource do: the reading position (a spine
-    item the ToC doesn't list counts too) or, when Apple Books recorded
-    none, the chapter of the most recent highlight. Returns
-    ``(chapter_id, inferred)``; a ToolError when there is neither."""
-    resolution = _resolve_current_chapter(apple_books, apple_books.get_book_by_id(book_id))
-    if resolution is None:
-        raise ToolError(
-            "Apple Books has no reading position and no highlights for this "
-            f"book yet, so there is no current chapter. list_book_chapters({book_id}) "
-            "lists its chapters; pass one's id as chapter_id."
-        )
-    return resolution.chapter_id, resolution.source == "recent_highlight"
+    """The chapter "current" reads: the same chapter id
+    get_current_reading_position and the currently-reading resource
+    resolve (``_resolve_current_chapter``), without that function's
+    chapter-list lookups, since the caller has the book open. That is
+    the reading position's chapter (a spine item the ToC doesn't list
+    counts too) or, when Apple Books recorded none, the chapter of the
+    most recent highlight. Returns ``(chapter_id, inferred)``; a
+    ToolError when there is neither."""
+    bookmark = apple_books.get_current_reading_location(book_id)
+    location = getattr(bookmark, "location", None) if bookmark is not None else None
+    if location and location.chapter_id:
+        return location.chapter_id, False
+    proxy = _most_recent_highlight_chapter(apple_books.get_book_by_id(book_id))
+    if proxy is not None:
+        return proxy[0], True
+    raise ToolError(
+        "Apple Books has no reading position and no highlights for this "
+        f"book yet, so there is no current chapter. list_book_chapters({book_id}) "
+        "lists its chapters; pass one's id as chapter_id."
+    )
 
 
 def _current_chapter_text(content, book_id: int, chapter_id: str) -> str:
