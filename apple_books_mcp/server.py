@@ -1,21 +1,32 @@
+import functools
 import logging
 import os
 import re
 from datetime import date, timedelta
-from mcp.types import (
-    TextContent
-)
+from typing import Annotated, Literal, Optional, Union
+
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.exceptions import ToolError
+from mcp.types import TextContent, ToolAnnotations
+from pydantic import BeforeValidator, WithJsonSchema
 from py_apple_books import PyAppleBooks
 from py_apple_books.exceptions import (
+    AnnotationNotFoundError,
     AppleBooksError,
     BookNotDownloadedError,
     BookNotFoundError,
     BooksAppRunningError,
+    ChapterNotFoundError,
     CollectionNotFoundError,
+    DBConnectionError,
+    DBError,
     DRMProtectedError,
+    InvalidArgumentError,
+    NotFoundError,
+    QueryTimeoutError,
     SchemaValidationError,
     SystemCollectionError,
+    UnsafeEpubEntryError,
     WriteError,
 )
 
@@ -61,11 +72,151 @@ _MAX_CHAPTER_CHARS = 50_000
 _MAX_CONTEXT_CHARS = 5_000
 
 
-def _bad_order(order_by) -> TextContent:
-    return TextContent(
-        type="text",
-        text=f"order_by must be 'newest' or 'oldest', not {order_by!r}.",
+# -- Parameter types --
+#
+# Ids are the integer primary keys the listings print as ``[N]``. The
+# schema says integer; a numeric string is accepted too (0.8 typed
+# some ids as strings), and anything else gets _id()'s message rather
+# than a pydantic one.
+_Id = Annotated[Union[int, str], WithJsonSchema({"type": "integer"})]
+
+
+def _lowercase(value):
+    return value.strip().lower() if isinstance(value, str) else value
+
+
+# Enumerations publish an ``enum`` in the schema. Matching ignores case
+# and surrounding spaces, as 0.8 did.
+_Color = Annotated[
+    Literal["yellow", "green", "blue", "pink", "purple"],
+    BeforeValidator(_lowercase),
+]
+_Order = Annotated[Literal["newest", "oldest"], BeforeValidator(_lowercase)]
+
+
+def _id(name: str, value) -> int:
+    """``value`` as an integer id, or a ToolError naming ``name``."""
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and re.fullmatch(r"\s*[+-]?[0-9]+\s*", value):
+        return int(value)
+    raise ToolError(
+        f"{name} must be a numeric id, like the 175 in \"[175] Title\", "
+        f"not {value!r}."
     )
+
+
+# -- Errors --
+#
+# A failure reaches the client as a ToolError (isError=true) whose
+# message says what to do next; an empty result stays a normal answer.
+# First match wins, so subclasses come before their bases.
+_ERRORS = (
+    (ToolError, "{e}"),
+    (BookNotFoundError,
+     "{e} Use search_books_by_title or list_all_books to find book ids."),
+    (CollectionNotFoundError,
+     "{e} Use list_all_collections or search_collections_by_title to find "
+     "collection ids."),
+    (AnnotationNotFoundError,
+     "{e} Annotation ids start the rows of list_annotations, "
+     "search_annotations and recent_annotations."),
+    (NotFoundError, "{e}"),
+    (InvalidArgumentError, "{e}"),
+    (BooksAppRunningError,
+     "Apple Books is open — writes are blocked while it runs. Ask the "
+     "user to quit Books (Cmd-Q), then try again."),
+    (SystemCollectionError, "{e}"),
+    (SchemaValidationError, "Write aborted for safety: {e} No changes were made."),
+    (WriteError, "Write failed: {e}"),
+    (QueryTimeoutError,
+     "{e} Try a smaller limit or a narrower search, or try again in a moment."),
+    # Library missing, or macOS denied access (the message names the
+    # Full Disk Access setting).
+    (DBConnectionError, "{e}"),
+    (DBError, "Apple Books database error: {e}"),
+    (BookNotDownloadedError, "Book not available: {e}"),
+    (DRMProtectedError, "Book is DRM-protected: {e}"),
+    (UnsafeEpubEntryError, "Refused to read this book's file: {e}"),
+)
+
+
+def _without_home(text: str) -> str:
+    """``text`` with the user's home directory shown as ``~``."""
+    home = os.path.expanduser("~").rstrip("/")
+    if not home:
+        return text
+    return re.sub(re.escape(home) + r"(?![\w.-])", "~", text)
+
+
+def _error_text(e: Exception, other: str = "Apple Books error: {e}") -> str:
+    """The client-facing message for ``e``. ``other`` is used for an
+    AppleBooksError the table doesn't name, so a tool can say what it
+    was doing."""
+    for kind, template in _ERRORS:
+        if isinstance(e, kind):
+            break
+    else:
+        if isinstance(e, AppleBooksError):
+            template = other
+        else:
+            template = f"Unexpected error ({type(e).__name__}): {{e}}"
+    return _without_home(template.format(e=e))
+
+
+# -- Registration --
+#
+# Every tool has a human title and behaviour hints (F47): the read
+# tools are read-only, and the five collection writes say whether they
+# destroy anything and whether repeating them is harmless. None of
+# them reaches outside the local library.
+
+
+def _tool(title: str, *, write: bool = False, destructive: bool = False,
+          idempotent: bool = False):
+    """Register the decorated function as a tool. Any exception it
+    raises reaches the client as a ToolError with :func:`_error_text`'s
+    message; the module-level name is the wrapped function, so direct
+    calls behave the same way."""
+    if write:
+        hints = ToolAnnotations(
+            title=title, readOnlyHint=False, destructiveHint=destructive,
+            idempotentHint=idempotent, openWorldHint=False,
+        )
+    else:
+        hints = ToolAnnotations(title=title, readOnlyHint=True, openWorldHint=False)
+
+    def register(fn):
+        @functools.wraps(fn)
+        def call(*args, **kwargs):
+            try:
+                return fn(*args, **kwargs)
+            except Exception as e:
+                if not isinstance(e, (ToolError, AppleBooksError)):
+                    logger.exception("%s failed", fn.__name__)
+                raise ToolError(_error_text(e)) from e
+
+        mcp.tool(title=title, annotations=hints)(call)
+        return call
+
+    return register
+
+
+def _book_content(book_id: int):
+    """The book's content handle. py-apple-books 1.x raises a bare
+    IndexError for an unknown id here; it becomes BookNotFoundError."""
+    try:
+        return apple_books.get_book_content(book_id)
+    except IndexError:
+        raise BookNotFoundError(f"No book with id {book_id}.") from None
+
+
+def _order(order_by) -> str:
+    """The library ordering for ``order_by``, or a ToolError."""
+    order = _order_by(order_by)
+    if order is None:
+        raise ToolError(f"order_by must be 'newest' or 'oldest', not {order_by!r}.")
+    return order
 
 
 def _books_with_progress(books) -> str:
@@ -73,7 +224,7 @@ def _books_with_progress(books) -> str:
 
 
 # -- Collections Tools --
-@mcp.tool()
+@_tool("List collections")
 def list_all_collections(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     List all collections in my Apple Books library. Output is one row
@@ -96,8 +247,8 @@ def list_all_collections(limit: int = _BOOK_PAGE, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
-def get_collection_books(collection_id: str):
+@_tool("List a collection's books")
+def get_collection_books(collection_id: _Id):
     """
     List the books in a collection as lean rows: ``[id] title by
     author``. Descriptions are intentionally omitted — collections
@@ -106,14 +257,9 @@ def get_collection_books(collection_id: str):
     specific book.
 
     Args:
-        collection_id: The ID of the collection to get books from.
+        collection_id: The collection's numeric ID.
     """
-    try:
-        collection = apple_books.get_collection_by_id(collection_id)
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No collection found with id {collection_id}."
-        )
+    collection = apple_books.get_collection_by_id(_id("collection_id", collection_id))
     books = list(collection.books)
     title = getattr(collection, "title", None) or "Untitled Collection"
     header = f"{title} ({len(books)} book{'s' if len(books) != 1 else ''})"
@@ -123,21 +269,16 @@ def get_collection_books(collection_id: str):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@mcp.tool()
-def describe_collection(collection_id: str):
+@_tool("Describe a collection")
+def describe_collection(collection_id: _Id):
     """
     Describe a specific collection in detail — title, details text,
     and the books contained in it.
 
     Args:
-        collection_id: The ID of the collection to get details for.
+        collection_id: The collection's numeric ID.
     """
-    try:
-        collection = apple_books.get_collection_by_id(collection_id)
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No collection found with id {collection_id}."
-        )
+    collection = apple_books.get_collection_by_id(_id("collection_id", collection_id))
 
     title = getattr(collection, "title", None) or "Untitled Collection"
     lines = [title, f"  Collection id: {collection.id}"]
@@ -162,7 +303,7 @@ def describe_collection(collection_id: str):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@mcp.tool()
+@_tool("Search collections by title")
 def search_collections_by_title(title: str):
     """
     Search for collections by title (substring match). Output is one
@@ -183,7 +324,8 @@ def search_collections_by_title(title: str):
 # Disabled unless the server was launched with --enable-writes. Every
 # write refuses while Books.app is running, takes an automatic backup
 # first (~/.py_apple_books/backups/), and only touches user-created
-# collections (plus "Want to Read" membership).
+# collections (plus "Want to Read" membership). A refusal or failure is
+# a ToolError; the backend's errors are mapped by _tool (_ERRORS).
 
 _WRITES_DISABLED_MSG = (
     "Collection editing is disabled. To enable it, add \"--enable-writes\" "
@@ -203,39 +345,13 @@ def _writes_enabled() -> bool:
     return os.environ.get("APPLE_BOOKS_MCP_ENABLE_WRITES") == "1"
 
 
-def _run_write(action) -> TextContent:
-    """Run a write callable, mapping backend errors to actionable text."""
-    try:
-        return action()
-    except BooksAppRunningError:
-        return TextContent(
-            type="text",
-            text=(
-                "Apple Books is open — writes are blocked while it runs. "
-                "Ask the user to quit Books (Cmd-Q), then try again."
-            ),
-        )
-    except SystemCollectionError as e:
-        return TextContent(type="text", text=str(e))
-    except (CollectionNotFoundError, BookNotFoundError) as e:
-        return TextContent(type="text", text=str(e))
-    except SchemaValidationError as e:
-        return TextContent(
-            type="text",
-            text=(
-                f"Write aborted for safety: {e} No changes were made."
-            ),
-        )
-    except WriteError as e:
-        return TextContent(type="text", text=f"Write failed: {e}")
-    except IndexError:
-        return TextContent(type="text", text="Book or collection not found.")
-    except AppleBooksError as e:
-        return TextContent(type="text", text=f"Could not complete the write: {e}")
+def _require_writes() -> None:
+    if not _writes_enabled():
+        raise ToolError(_WRITES_DISABLED_MSG)
 
 
-@mcp.tool()
-def create_collection(title: str, details: str = None):
+@_tool("Create a collection", write=True)
+def create_collection(title: str, details: Optional[str] = None):
     """
     Create a new collection in the user's Apple Books library.
     Requires write access and Books to be quit; a backup is taken
@@ -245,23 +361,19 @@ def create_collection(title: str, details: str = None):
         title: Name for the new collection.
         details: Optional description.
     """
-    if not _writes_enabled():
-        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
-
-    def action():
-        collection = apple_books.create_collection(title, details)
-        return TextContent(
-            type="text",
-            text=(
-                f"Created collection [{collection.id}] {collection.title!r}. "
-                f"{_ICLOUD_CAVEAT}"
-            ),
-        )
-    return _run_write(action)
+    _require_writes()
+    collection = apple_books.create_collection(title, details)
+    return TextContent(
+        type="text",
+        text=(
+            f"Created collection [{collection.id}] {collection.title!r}. "
+            f"{_ICLOUD_CAVEAT}"
+        ),
+    )
 
 
-@mcp.tool()
-def rename_collection(collection_id: int, new_title: str):
+@_tool("Rename a collection", write=True, destructive=True, idempotent=True)
+def rename_collection(collection_id: _Id, new_title: str):
     """
     Rename a user-created collection (built-in collections are
     refused). Requires write access and Books to be quit.
@@ -270,23 +382,20 @@ def rename_collection(collection_id: int, new_title: str):
         collection_id: The collection's numeric ID.
         new_title: The new name.
     """
-    if not _writes_enabled():
-        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
-
-    def action():
-        collection = apple_books.rename_collection(collection_id, new_title)
-        return TextContent(
-            type="text",
-            text=(
-                f"Renamed collection [{collection.id}] to "
-                f"{collection.title!r}. {_ICLOUD_CAVEAT}"
-            ),
-        )
-    return _run_write(action)
+    _require_writes()
+    collection_id = _id("collection_id", collection_id)
+    collection = apple_books.rename_collection(collection_id, new_title)
+    return TextContent(
+        type="text",
+        text=(
+            f"Renamed collection [{collection.id}] to "
+            f"{collection.title!r}. {_ICLOUD_CAVEAT}"
+        ),
+    )
 
 
-@mcp.tool()
-def delete_collection(collection_id: int):
+@_tool("Delete a collection", write=True, destructive=True, idempotent=True)
+def delete_collection(collection_id: _Id):
     """
     Delete a user-created collection (built-in collections are
     refused). The books inside are NOT deleted — only the collection.
@@ -295,25 +404,22 @@ def delete_collection(collection_id: int):
     Args:
         collection_id: The collection's numeric ID.
     """
-    if not _writes_enabled():
-        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
-
-    def action():
-        collection = apple_books.get_collection_by_id(collection_id)
-        title = collection.title
-        apple_books.delete_collection(collection_id)
-        return TextContent(
-            type="text",
-            text=(
-                f"Deleted collection [{collection_id}] {title!r}. The books "
-                f"that were in it are untouched. {_ICLOUD_CAVEAT}"
-            ),
-        )
-    return _run_write(action)
+    _require_writes()
+    collection_id = _id("collection_id", collection_id)
+    collection = apple_books.get_collection_by_id(collection_id)
+    title = collection.title
+    apple_books.delete_collection(collection_id)
+    return TextContent(
+        type="text",
+        text=(
+            f"Deleted collection [{collection_id}] {title!r}. The books "
+            f"that were in it are untouched. {_ICLOUD_CAVEAT}"
+        ),
+    )
 
 
-@mcp.tool()
-def add_book_to_collection(collection_id: int, book_id: int):
+@_tool("Add a book to a collection", write=True, idempotent=True)
+def add_book_to_collection(collection_id: _Id, book_id: _Id):
     """
     Add a book to a collection (user-created collections and "Want to
     Read"). Idempotent. Requires write access and Books to be quit.
@@ -322,33 +428,32 @@ def add_book_to_collection(collection_id: int, book_id: int):
         collection_id: The collection's numeric ID.
         book_id: The book's numeric ID.
     """
-    if not _writes_enabled():
-        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
-
-    def action():
-        changed = apple_books.add_book_to_collection(collection_id, book_id)
-        book = apple_books.get_book_by_id(book_id)
-        collection = apple_books.get_collection_by_id(collection_id)
-        if changed:
-            return TextContent(
-                type="text",
-                text=(
-                    f"Added {book.title!r} to {collection.title!r}. "
-                    f"{_ICLOUD_CAVEAT}"
-                ),
-            )
+    _require_writes()
+    collection_id = _id("collection_id", collection_id)
+    book_id = _id("book_id", book_id)
+    changed = apple_books.add_book_to_collection(collection_id, book_id)
+    book = apple_books.get_book_by_id(book_id)
+    collection = apple_books.get_collection_by_id(collection_id)
+    if changed:
         return TextContent(
             type="text",
             text=(
-                f"{book.title!r} is already in {collection.title!r} — "
-                "nothing changed."
+                f"Added {book.title!r} to {collection.title!r}. "
+                f"{_ICLOUD_CAVEAT}"
             ),
         )
-    return _run_write(action)
+    return TextContent(
+        type="text",
+        text=(
+            f"{book.title!r} is already in {collection.title!r} — "
+            "nothing changed."
+        ),
+    )
 
 
-@mcp.tool()
-def remove_book_from_collection(collection_id: int, book_id: int):
+@_tool("Remove a book from a collection", write=True, destructive=True,
+       idempotent=True)
+def remove_book_from_collection(collection_id: _Id, book_id: _Id):
     """
     Remove a book from a collection (the book stays in the library).
     Idempotent. Requires write access and Books to be quit.
@@ -357,33 +462,31 @@ def remove_book_from_collection(collection_id: int, book_id: int):
         collection_id: The collection's numeric ID.
         book_id: The book's numeric ID.
     """
-    if not _writes_enabled():
-        return TextContent(type="text", text=_WRITES_DISABLED_MSG)
-
-    def action():
-        changed = apple_books.remove_book_from_collection(collection_id, book_id)
-        book = apple_books.get_book_by_id(book_id)
-        collection = apple_books.get_collection_by_id(collection_id)
-        if changed:
-            return TextContent(
-                type="text",
-                text=(
-                    f"Removed {book.title!r} from {collection.title!r}. "
-                    f"The book is still in the library. {_ICLOUD_CAVEAT}"
-                ),
-            )
+    _require_writes()
+    collection_id = _id("collection_id", collection_id)
+    book_id = _id("book_id", book_id)
+    changed = apple_books.remove_book_from_collection(collection_id, book_id)
+    book = apple_books.get_book_by_id(book_id)
+    collection = apple_books.get_collection_by_id(collection_id)
+    if changed:
         return TextContent(
             type="text",
             text=(
-                f"{book.title!r} wasn't in {collection.title!r} — "
-                "nothing changed."
+                f"Removed {book.title!r} from {collection.title!r}. "
+                f"The book is still in the library. {_ICLOUD_CAVEAT}"
             ),
         )
-    return _run_write(action)
+    return TextContent(
+        type="text",
+        text=(
+            f"{book.title!r} wasn't in {collection.title!r} — "
+            "nothing changed."
+        ),
+    )
 
 
 # -- Books Tools --
-@mcp.tool()
+@_tool("List all books")
 def list_all_books(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     List all books in my Apple Books library. Output is one row per
@@ -407,20 +510,17 @@ def list_all_books(limit: int = _BOOK_PAGE, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
-def describe_book(book_id: str):
+@_tool("Describe a book")
+def describe_book(book_id: _Id):
     """
     Describe a specific book in detail — metadata (title, author, genre,
     page count), reading status (progress, last opened, finished date),
     and annotation count.
 
     Args:
-        book_id: The ID of the book to get.
+        book_id: The book's numeric ID.
     """
-    try:
-        book = apple_books.get_book_by_id(book_id)
-    except IndexError:
-        return TextContent(type="text", text=f"No book found with id {book_id}.")
+    book = apple_books.get_book_by_id(_id("book_id", book_id))
 
     title = getattr(book, "title", None) or "Unknown Title"
     author = getattr(book, "author", None) or "Unknown Author"
@@ -467,7 +567,7 @@ def describe_book(book_id: str):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@mcp.tool()
+@_tool("Search books by title")
 def search_books_by_title(title: str):
     """
     Search for books by title (substring match). Output is one row per
@@ -484,7 +584,7 @@ def search_books_by_title(title: str):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@mcp.tool()
+@_tool("Find books by genre")
 def get_books_by_genre(genre: str, limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books whose genre matches the given string (substring match).
@@ -515,7 +615,7 @@ def get_books_by_genre(genre: str, limit: int = _BOOK_PAGE, offset: int = 0):
 # Every row carries the book_id as the leading ``[N]`` so Claude can
 # hand off to describe_book, list_annotations, or
 # get_current_reading_position without a second lookup.
-@mcp.tool()
+@_tool("Books in progress")
 def get_books_in_progress(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books currently being read (progress > 0% and < 100%). Output
@@ -537,7 +637,7 @@ def get_books_in_progress(limit: int = _BOOK_PAGE, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
+@_tool("Finished books")
 def get_finished_books(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books that have been finished. Output per row: ``[id] title
@@ -559,7 +659,7 @@ def get_finished_books(limit: int = _BOOK_PAGE, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
+@_tool("Unstarted books")
 def get_unstarted_books(limit: int = _BOOK_PAGE, offset: int = 0):
     """
     Get books that haven't been started yet (0% progress). Output per
@@ -581,7 +681,7 @@ def get_unstarted_books(limit: int = _BOOK_PAGE, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
+@_tool("Recently read books")
 def get_recently_read_books(limit: int = 10, offset: int = 0):
     """
     Get the most recently read books, newest first (by when each was
@@ -608,7 +708,7 @@ def get_recently_read_books(limit: int = 10, offset: int = 0):
 
 
 # -- Annotations Tools --
-@mcp.tool()
+@_tool("List all annotations")
 def list_all_annotations(limit: int = _ANNOTATION_PAGE, offset: int = 0):
     """
     Browse all annotations grouped by book, most recent first. Rows:
@@ -650,8 +750,8 @@ def list_all_annotations(limit: int = _ANNOTATION_PAGE, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
-def list_annotations(book_id: int, limit: int = _ANNOTATION_PAGE, offset: int = 0):
+@_tool("List a book's annotations")
+def list_annotations(book_id: _Id, limit: int = _ANNOTATION_PAGE, offset: int = 0):
     """
     List annotations within a specific book in reading order (their
     position in the book). Rows are lean —
@@ -664,10 +764,7 @@ def list_annotations(book_id: int, limit: int = _ANNOTATION_PAGE, offset: int = 
         offset: Annotations to skip, for paging; a footer names the
             next offset when there are more.
     """
-    try:
-        book = apple_books.get_book_by_id(book_id)
-    except IndexError:
-        return TextContent(type="text", text=f"No book found with id {book_id}.")
+    book = apple_books.get_book_by_id(_id("book_id", book_id))
 
     # Reading order comes from each annotation's CFI, so it needs no
     # ToC (and works for books that can't be opened); the ToC is only
@@ -691,12 +788,12 @@ def list_annotations(book_id: int, limit: int = _ANNOTATION_PAGE, offset: int = 
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
+@_tool("Highlights by color")
 def get_highlights_by_color(
-    color: str,
+    color: _Color,
     limit: int = _ANNOTATION_PAGE,
     offset: int = 0,
-    order_by: str = "newest",
+    order_by: _Order = "newest",
 ):
     """
     Browse highlights of a particular color, grouped by book.
@@ -711,9 +808,7 @@ def get_highlights_by_color(
         offset: Annotations to skip, for paging.
         order_by: ``newest`` (default) or ``oldest`` first.
     """
-    order = _order_by(order_by)
-    if order is None:
-        return _bad_order(order_by)
+    order = _order(order_by)
     args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
     page = _query_page(
         apple_books.get_annotations_by_color(color, order_by=order),
@@ -743,12 +838,12 @@ def get_highlights_by_color(
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
+@_tool("Search notes")
 def search_notes(
     note: str,
     limit: int = _ANNOTATION_PAGE,
     offset: int = 0,
-    order_by: str = "newest",
+    order_by: _Order = "newest",
 ):
     """
     Search user notes (not highlights) by substring, grouped by book.
@@ -761,9 +856,7 @@ def search_notes(
         offset: Annotations to skip, for paging.
         order_by: ``newest`` (default) or ``oldest`` first.
     """
-    order = _order_by(order_by)
-    if order is None:
-        return _bad_order(order_by)
+    order = _order(order_by)
     args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
     page = _query_page(
         apple_books.search_annotation_by_note(note, order_by=order),
@@ -786,12 +879,12 @@ def search_notes(
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
+@_tool("Search annotations")
 def search_annotations(
     text: str,
     limit: int = _ANNOTATION_PAGE,
     offset: int = 0,
-    order_by: str = "newest",
+    order_by: _Order = "newest",
 ):
     """
     Search across every annotation field — selected (highlighted) text,
@@ -805,9 +898,7 @@ def search_annotations(
         offset: Annotations to skip, for paging.
         order_by: ``newest`` (default) or ``oldest`` first.
     """
-    order = _order_by(order_by)
-    if order is None:
-        return _bad_order(order_by)
+    order = _order(order_by)
     args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
     # Text search has no count in the library; one extra row tells
     # whether there is a next page.
@@ -831,7 +922,7 @@ def search_annotations(
     return TextContent(type="text", text=body)
 
 
-@mcp.tool()
+@_tool("Recent annotations")
 def recent_annotations(limit: int = 10, offset: int = 0):
     """
     Most recent annotations, newest first. Flat rows with the creation
@@ -863,8 +954,8 @@ def recent_annotations(limit: int = 10, offset: int = 0):
     return TextContent(type="text", text=text)
 
 
-@mcp.tool()
-def describe_annotation(annotation_id: str):
+@_tool("Describe an annotation")
+def describe_annotation(annotation_id: _Id):
     """
     Describe a specific annotation in detail — text, note, book,
     chapter, color, creation date. For the passage around the
@@ -873,12 +964,7 @@ def describe_annotation(annotation_id: str):
     Args:
         annotation_id: The annotation's numeric ID.
     """
-    try:
-        anno = apple_books.get_annotation_by_id(annotation_id)
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No annotation found with id {annotation_id}."
-        )
+    anno = apple_books.get_annotation_by_id(_id("annotation_id", annotation_id))
 
     book = getattr(anno, "book", None)
     book_title = getattr(book, "title", None) or "(book no longer in library)"
@@ -929,9 +1015,28 @@ def describe_annotation(annotation_id: str):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@mcp.tool()
+def _no_context_reason(anno) -> str:
+    """Why the library found no passage around ``anno``. A book that
+    can't be opened (not downloaded, DRM) raises its own error here."""
+    if not anno.location or not anno.location.chapter_id:
+        return (
+            "this annotation has no CFI chapter hint "
+            "(likely an older or iCloud-only highlight)."
+        )
+    book = getattr(anno, "book", None)
+    if book is None:
+        return "the book is no longer in the library."
+    selected = (getattr(anno, "selected_text", None) or "").strip()
+    if not selected and not (getattr(anno, "representative_text", None) or "").strip():
+        return "the annotation has no highlighted text (it only marks a place)."
+    if not _book_content(book.id).is_epub:
+        return "only EPUB text can be read, and this book isn't an EPUB."
+    return "the highlighted text can't be found in the book's file on this Mac."
+
+
+@_tool("Get the passage around a highlight")
 def get_annotation_context(
-    annotation_id: int,
+    annotation_id: _Id,
     chars_before: int = 500,
     chars_after: int = 500,
 ):
@@ -940,7 +1045,7 @@ def get_annotation_context(
     and after, with the highlight itself wrapped in ``«...»``. Use
     this to expand on a highlight without fetching the whole chapter.
 
-    Works for non-DRM EPUBs downloaded to this Mac; degrades with a
+    Works for non-DRM EPUBs downloaded to this Mac; fails with a
     clear message for DRM-protected books, iCloud-only books, or
     older annotations that lack the chapter hint.
 
@@ -951,13 +1056,8 @@ def get_annotation_context(
         chars_after: Chars of context after the highlight (0–5000).
             Default 500.
     """
-    try:
-        anno = apple_books.get_annotation_by_id(annotation_id)
-    except IndexError:
-        return TextContent(
-            type="text",
-            text=f"No annotation found with id {annotation_id}.",
-        )
+    annotation_id = _id("annotation_id", annotation_id)
+    anno = apple_books.get_annotation_by_id(annotation_id)
 
     # Clamp the window: a negative size garbles it, and a huge one
     # returns the whole chapter.
@@ -976,30 +1076,14 @@ def get_annotation_context(
             chars_before=chars_before,
             chars_after=chars_after,
         )
-    except (BookNotDownloadedError, DRMProtectedError, AppleBooksError) as e:
-        return TextContent(
-            type="text", text=f"Could not read annotation context: {e}"
-        )
+    except AppleBooksError as e:
+        raise ToolError(_error_text(e, "Could not read annotation context: {e}")) from e
 
     if not window:
-        # Backend returns "" in several degraded cases — surface a
-        # reason so Claude (or the user) knows whether to retry with a
+        # The library returns "" in several degraded cases — say which,
+        # so Claude (or the user) knows whether to retry with a
         # different annotation or move on.
-        if not anno.location or not anno.location.chapter_id:
-            reason = (
-                "this annotation has no CFI chapter hint "
-                "(likely an older or iCloud-only highlight)."
-            )
-        elif getattr(anno, "book", None) is None:
-            reason = "the book is no longer in the library."
-        else:
-            reason = (
-                "the book isn't downloaded locally, is DRM-protected, "
-                "or the highlight's anchor text can't be located."
-            )
-        return TextContent(
-            type="text", text=f"No surrounding context available: {reason}"
-        )
+        raise ToolError(f"No surrounding context available: {_no_context_reason(anno)}")
 
     # Wrap the highlight with guillemets so Claude can see exactly which
     # span the user marked. Match with flexible whitespace — Apple
@@ -1023,13 +1107,13 @@ def get_annotation_context(
     return TextContent(type="text", text=window)
 
 
-@mcp.tool()
+@_tool("Annotations by date range")
 def get_annotations_by_date_range(
-    after: str = None,
-    before: str = None,
+    after: Optional[str] = None,
+    before: Optional[str] = None,
     limit: int = _ANNOTATION_PAGE,
     offset: int = 0,
-    order_by: str = "newest",
+    order_by: _Order = "newest",
 ):
     """
     Annotations created within a date range, newest first by default.
@@ -1053,19 +1137,14 @@ def get_annotations_by_date_range(
         after_dt = _parse_date_arg("after", after)
         before_dt = _parse_date_arg("before", before, end_of_day=True)
     except ValueError as e:
-        return TextContent(type="text", text=str(e))
+        raise ToolError(str(e)) from None
     if after_dt and before_dt and after_dt > before_dt:
-        return TextContent(
-            type="text",
-            text=(
-                f"after ({after_dt:%Y-%m-%d %H:%M}) is later than before "
-                f"({before_dt:%Y-%m-%d %H:%M}), so no annotation can match. "
-                "Swap them."
-            ),
+        raise ToolError(
+            f"after ({after_dt:%Y-%m-%d %H:%M}) is later than before "
+            f"({before_dt:%Y-%m-%d %H:%M}), so no annotation can match. "
+            "Swap them."
         )
-    order = _order_by(order_by)
-    if order is None:
-        return _bad_order(order_by)
+    order = _order(order_by)
 
     args = _page_args(limit, offset, default=_ANNOTATION_PAGE)
     page = _query_page(
@@ -1094,8 +1173,8 @@ def get_annotations_by_date_range(
 
 
 # -- Content Tools --
-@mcp.tool()
-def list_book_chapters(book_id: int):
+@_tool("List a book's chapters")
+def list_book_chapters(book_id: _Id):
     """
     List the table of contents for a book — chapter titles, order, and
     nesting depth. Only works for non-DRM EPUBs that have been downloaded
@@ -1104,23 +1183,12 @@ def list_book_chapters(book_id: int):
     Args:
         book_id: The book's numeric ID (from ``list_all_books`` or similar).
     """
-    try:
-        content = apple_books.get_book_content(book_id)
-    except BookNotDownloadedError as e:
-        return TextContent(type="text", text=f"Book not available: {e}")
-    except DRMProtectedError as e:
-        return TextContent(type="text", text=f"Book is DRM-protected: {e}")
-    except AppleBooksError as e:
-        return TextContent(type="text", text=f"Could not open book: {e}")
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No book found with id {book_id}."
-        )
-
+    book_id = _id("book_id", book_id)
+    content = _book_content(book_id)
     try:
         chapters = content.list_chapters()
     except AppleBooksError as e:
-        return TextContent(type="text", text=f"Could not list chapters: {e}")
+        raise ToolError(_error_text(e, "Could not list chapters: {e}")) from e
 
     if not chapters:
         return TextContent(type="text", text="No chapters found for this book.")
@@ -1132,9 +1200,9 @@ def list_book_chapters(book_id: int):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@mcp.tool()
+@_tool("Get chapter text")
 def get_chapter_content(
-    book_id: int,
+    book_id: _Id,
     chapter_id: str,
     offset: int = 0,
     max_chars: int = 10000,
@@ -1165,23 +1233,22 @@ def get_chapter_content(
         offset: Character offset to start from. Defaults to 0.
         max_chars: Max chars to return (1–50000). Default 10000.
     """
-    try:
-        content = apple_books.get_book_content(book_id)
-    except BookNotDownloadedError as e:
-        return TextContent(type="text", text=f"Book not available: {e}")
-    except DRMProtectedError as e:
-        return TextContent(type="text", text=f"Book is DRM-protected: {e}")
-    except AppleBooksError as e:
-        return TextContent(type="text", text=f"Could not open book: {e}")
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No book found with id {book_id}."
-        )
+    book_id = _id("book_id", book_id)
+    # Check the arguments before opening the book. A huge (or, from
+    # Python, None) max_chars is capped so one call can't return a
+    # whole long chapter.
+    if max_chars is not None and max_chars <= 0:
+        raise ToolError("max_chars must be a positive integer.")
 
+    content = _book_content(book_id)
     try:
         text = content.get_chapter(chapter_id)
+    except ChapterNotFoundError as e:
+        raise ToolError(
+            f"{e} list_book_chapters({book_id}) lists this book's chapters."
+        ) from e
     except AppleBooksError as e:
-        return TextContent(type="text", text=f"Could not read chapter: {e}")
+        raise ToolError(_error_text(e, "Could not read chapter: {e}")) from e
 
     if not text.strip():
         return TextContent(
@@ -1190,13 +1257,6 @@ def get_chapter_content(
         )
 
     total_chars = len(text)
-
-    # Validate inputs before slicing. A huge (or, from Python, None)
-    # max_chars is capped so one call can't return a whole long chapter.
-    if max_chars is not None and max_chars <= 0:
-        return TextContent(
-            type="text", text="max_chars must be a positive integer."
-        )
     cap_note = ""
     if max_chars is None or max_chars > _MAX_CHAPTER_CHARS:
         if max_chars is not None:
@@ -1241,8 +1301,8 @@ def get_chapter_content(
     return TextContent(type="text", text=f"{sliced}\n\n{footer}{cap_note}")
 
 
-@mcp.tool()
-def get_current_reading_position(book_id: int):
+@_tool("Current reading position")
+def get_current_reading_position(book_id: _Id):
     """
     Return where the user last left off reading a book — chapter
     title and chapter_id, no text. Follow up with
@@ -1255,21 +1315,12 @@ def get_current_reading_position(book_id: int):
     Args:
         book_id: The book's numeric ID.
     """
-    try:
-        book = apple_books.get_book_by_id(book_id)
-    except IndexError:
-        return TextContent(
-            type="text", text=f"No book found with id {book_id}."
-        )
-
+    book_id = _id("book_id", book_id)
+    book = apple_books.get_book_by_id(book_id)
     try:
         resolution = _resolve_current_chapter(apple_books, book)
-    except BookNotDownloadedError as e:
-        return TextContent(type="text", text=f"Book not available: {e}")
-    except DRMProtectedError as e:
-        return TextContent(type="text", text=f"Book is DRM-protected: {e}")
     except AppleBooksError as e:
-        return TextContent(type="text", text=f"Could not resolve position: {e}")
+        raise ToolError(_error_text(e, "Could not resolve position: {e}")) from e
 
     if resolution is None:
         return TextContent(
@@ -1326,7 +1377,7 @@ def get_current_reading_position(book_id: int):
 
 
 # -- Library Stats Tools --
-@mcp.tool()
+@_tool("Library stats")
 def get_library_stats():
     """Get a summary of your Apple Books library with reading stats."""
     # Counted in SQL by the library (a handful of statements); no book
