@@ -15,6 +15,7 @@ from __future__ import annotations
 import html
 import logging
 import re
+import unicodedata
 from datetime import date, datetime, time
 from typing import Callable, NamedTuple, Optional, TYPE_CHECKING
 
@@ -102,37 +103,57 @@ def _get_book_title(annotation) -> str:
 # Untrusted book text
 # --------------------------------------------------------------------------
 
+# Code points looked at for hidden characters and look-alikes: the
+# basic and supplementary multilingual planes, and the tags and
+# variation selectors. The scan takes a few milliseconds at import.
+_CODE_POINTS = (*range(0x20000), *range(0xE0000, 0xE1000))
+
 # Characters a crafted book could hide inside a ``</book_text>`` tag:
-# whitespace, the default-ignorable characters (zero-width spaces and
-# joiners, soft hyphen, direction marks, variation selectors, Hangul
-# fillers, Unicode tags) and combining marks.
-_HIDDEN = (
-    r"[\s\u00ad\u034f\u061c\u115f\u1160\u17b4\u17b5\u180b-\u180f"
-    r"\u200b-\u200f\u202a-\u202e\u2060-\u206f\u3164\ufe00-\ufe0f\ufeff"
-    r"\uffa0\ufff0-\ufff8\U0001bca0-\U0001bca3\U0001d173-\U0001d17a"
-    r"\U000e0000-\U000e0fff"
-    r"\u0300-\u036f\u1ab0-\u1aff\u1dc0-\u1dff\u20d0-\u20ff\ufe20-\ufe2f]*"
-)
+# whitespace, controls, format characters (zero-width spaces and
+# joiners, soft hyphen, direction marks, Unicode tags), combining marks
+# (variation selectors included), the blank fillers (Hangul, the empty
+# Braille pattern), and the unassigned code points beside the
+# specials and in the tags block. The translated copy has a zero-width
+# space for each.
+_HIDDEN_CATEGORIES = {"Cc", "Cf", "Mn", "Me", "Zs", "Zl", "Zp"}
+_BLANKS = {
+    0x115F, 0x1160, 0x2800, 0x3164, 0xFFA0, *range(0xFFF0, 0xFFF9),
+    *range(0xE0000, 0xE1000),
+}
+_HIDDEN = "\u200b"
+
+# The tag's characters, and what can stand between ``book`` and ``text``.
+_TAG_CHARS = "</booktext_.-"
 
 
 def _tag_lookalikes() -> dict:
-    """A ``str.translate`` table from look-alikes of the tag's
-    characters to the characters: fullwidth forms, and the angle
-    brackets, slashes, dashes and Cyrillic or Greek letters that pass
-    for ``<``, ``/``, ``_`` and ``booktext``. One character maps to
-    one, so a match in the translated copy is at the same index in the
-    text."""
-    table = {c: c - 0xFEE0 for c in range(0xFF01, 0xFF5F)}
+    """A ``str.translate`` table that maps each hidden character to
+    :data:`_HIDDEN`, and each look-alike of the tag's characters to the
+    character: capitals, every character whose compatibility form
+    (NFKC) is one (fullwidth, small, mathematical, circled, superscript
+    forms), and the angle brackets, slashes, dashes, low lines, small
+    capitals and Cyrillic or Greek letters that pass for one. One
+    character maps to one, so a match in the translated copy is at the
+    same index in the text."""
+    table = {}
+    for c in _CODE_POINTS:
+        char = chr(c)
+        if c in _BLANKS or unicodedata.category(char) in _HIDDEN_CATEGORIES:
+            table[c] = _HIDDEN
+            continue
+        folded = unicodedata.normalize("NFKC", char).lower()
+        if folded != char and len(folded) == 1 and folded in _TAG_CHARS:
+            table[c] = folded
     for lookalikes, char in (
-        ("\ufe64\u2039\u2329\u3008\u27e8", "<"),
-        ("\u2215\u2044\u29f8", "/"),
-        ("\u2010\u2011\u2012\u2013\u2014\u2212\ufe63", "-"),
-        ("\ufe4d\ufe4e\ufe4f", "_"),
-        ("\u0412\u0392\u042c\u044c", "b"),
-        ("\u043e\u041e\u03bf\u039f", "o"),
-        ("\u043a\u041a\u03ba\u039a", "k"),
-        ("\u0442\u0422\u03c4\u03a4", "t"),
-        ("\u0435\u0415\u0395", "e"),
+        ("\u2039\u2329\u3008\u27e8\u1438\u276c\u276e\u2770\u02c2", "<"),
+        ("\u2215\u2044\u29f8\u2571\u27cb", "/"),
+        ("\u2010\u2011\u2012\u2013\u2014\u2212", "-"),
+        ("\u2017\u02cd", "_"),
+        ("\u0412\u0392\u042c\u044c\u0299", "b"),
+        ("\u043e\u041e\u03bf\u039f\u1d0f", "o"),
+        ("\u043a\u041a\u03ba\u039a\u1d0b", "k"),
+        ("\u0442\u0422\u03c4\u03a4\u1d1b", "t"),
+        ("\u0435\u0415\u0395\u1d07", "e"),
         ("\u0445\u0425\u03c7\u03a7\u00d7", "x"),
     ):
         table.update(dict.fromkeys(map(ord, lookalikes), char))
@@ -141,15 +162,26 @@ def _tag_lookalikes() -> dict:
 
 _TAG_LOOKALIKES = _tag_lookalikes()
 
-# The ``<`` of a ``<book_text`` or ``</book_text`` tag, in any case, with
-# hidden characters anywhere in it and an optional ``_`` or ``-``. Each
-# run of hidden characters is followed by a character that can't be one,
-# so the match is linear in the length of the text.
+# The ``<`` of a ``<book_text`` or ``</book_text`` tag in the translated
+# copy (so in any case, with look-alikes), with hidden characters
+# anywhere in it and any run of ``_``, ``.`` or ``-`` (or none) between
+# the words. Each run of hidden characters is followed by a character
+# that can't be one, so the match is linear in the length of the text.
+_GAP = f"{_HIDDEN}*"
 _BOOK_TEXT_TAG = re.compile(
-    f"<(?={_HIDDEN}(?:/{_HIDDEN})?{_HIDDEN.join('book')}{_HIDDEN}"
-    f"(?:[_-]{_HIDDEN})?{_HIDDEN.join('text')})",
-    re.IGNORECASE,
+    f"<(?={_GAP}(?:/{_GAP})?{_GAP.join('book')}{_GAP}"
+    f"(?:[_.-]{_GAP})*{_GAP.join('text')})"
 )
+
+# Characters that would break an attribute value's line.
+_CONTROL = re.compile("[\x00-\x1f\x7f-\x9f\u2028\u2029]")
+
+
+def _attribute(value) -> str:
+    """``value`` for a quoted attribute: HTML-escaped, with control
+    characters and line breaks as character references."""
+    escaped = html.escape(str(value), quote=True)
+    return _CONTROL.sub(lambda m: f"&#{ord(m[0])};", escaped)
 
 
 def _book_text(text: str, **attrs) -> str:
@@ -164,7 +196,7 @@ def _book_text(text: str, **attrs) -> str:
     that say where the text came from.
     """
     attributes = "".join(
-        f' {name}="{html.escape(str(value), quote=True)}"'
+        f' {name}="{_attribute(value)}"'
         for name, value in attrs.items()
         if value is not None
     )
