@@ -38,6 +38,7 @@ dependencies = [
     { name = "click" },
     { name = "mcp" },
     { name = "py-apple-books" },
+    { name = "pydantic" },
 ]
 
 [package.dev-dependencies]
@@ -50,6 +51,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.1.8" },
     { name = "mcp", specifier = ">=1.10.0,<2" },
     { name = "py-apple-books", specifier = ">=1.10,<2" },
+    { name = "pydantic", specifier = ">=2.7.2,<3" },
 ]
 
 [package.metadata.requires-dev]
