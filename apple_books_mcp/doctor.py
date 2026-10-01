@@ -133,12 +133,17 @@ def _check_server(report: _Report, writes: bool) -> None:
 
     from apple_books_mcp import _cancel_guard, _runtime
 
+    # What the server's start-up (apple_books_mcp.main) would do, worked
+    # out without patching or moving anything.
     threads = _runtime.thread_count()
-    if threads and _cancel_guard.install():
+    reason = _runtime.skip_reason(server.mcp, threads)
+    if reason is None and not _cancel_guard.can_install():
+        reason = f"no cancel guard for mcp {_dist_version('mcp')}"
+    if reason is None:
         report(NOTE, f"tool calls run in worker threads, up to {threads} at a time "
-                     f"({_runtime.ENV_THREADS})")
+                     f"({_runtime.ENV_THREADS}); collection writes one at a time")
     else:
-        report(NOTE, "tool calls run one at a time on the event loop")
+        report(NOTE, f"tool calls run one at a time on the event loop ({reason})")
 
 
 def _check_library(report: _Report, writes: bool) -> None:
