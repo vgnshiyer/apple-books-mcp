@@ -132,8 +132,15 @@ jobs:
       - name: Validate server.json against the registry
         run: ./mcp-publisher validate mcpb-dist/server.json
 
+  audit:
+    # Known vulnerabilities in the dependencies the extension installs
+    # from uv.lock. A release can't ship a lock with open advisories.
+    permissions:
+      contents: read
+    uses: ./.github/workflows/audit.yml
+
   pypi:
-    needs: [build, bundle]
+    needs: [build, bundle, audit]
     runs-on: ubuntu-latest
     # PyPI's trusted publisher is this workflow file plus this environment.
     environment:

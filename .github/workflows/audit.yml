@@ -1,0 +1,45 @@
+name: Audit
+
+# Known vulnerabilities in the dependencies the Claude Desktop extension
+# installs: it runs `uv sync --frozen --no-dev` against the bundled
+# uv.lock, so a stale lock ships as is. (uvx users resolve fresh.)
+# Runs when the lock changes, weekly for new advisories, and before
+# every release (publish.yml calls it and won't publish if it fails).
+#
+# To accept an advisory the server can't reach, such as one in the HTTP
+# transports a stdio server never starts, add `--ignore-vuln ID` below
+# with the reason in a comment. Otherwise refresh the lock.
+
+on:
+  pull_request:
+    paths: [uv.lock, pyproject.toml]
+  push:
+    branches: [main]
+    paths: [uv.lock, pyproject.toml]
+  schedule:
+    - cron: "0 14 * * 1"
+  workflow_dispatch:
+  workflow_call:
+
+permissions: {}
+
+jobs:
+  locked-dependencies:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
+      - name: Export the extension's locked dependencies
+        run: uv export --frozen --no-dev --no-emit-project --format requirements-txt -o bundle-requirements.txt
+
+      # Python 3.10, the floor, installs the most backports.
+      - name: Audit them
+        run: uvx --python 3.10 pip-audit@2.10.0 --disable-pip --progress-spinner off -r bundle-requirements.txt
