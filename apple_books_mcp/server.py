@@ -1,14 +1,15 @@
 import functools
+import json
 import logging
 import os
 import re
 from datetime import date, timedelta
-from typing import Annotated, Optional, Union
+from typing import Annotated, Union
 
 from mcp.server.fastmcp import FastMCP
 from mcp.server.fastmcp.exceptions import ResourceError, ToolError
 from mcp.types import TextContent, ToolAnnotations
-from pydantic import BeforeValidator, WithJsonSchema
+from pydantic import BeforeValidator, WithJsonSchema, WrapValidator
 from py_apple_books import PyAppleBooks
 from py_apple_books.exceptions import (
     AnnotationNotFoundError,
@@ -103,17 +104,39 @@ _MAX_CONTEXT_CHARS = 5_000
 # -- Parameter types --
 
 
-def _bool_as_text(value):
-    """JSON true/false as text, which would otherwise pass as 1/0."""
-    return str(value).lower() if isinstance(value, bool) else value
+def _id_as_text(value):
+    """JSON true, false and null, or a fractional number, as text.
+    Pydantic would take true as 1, and answer the others with a
+    two-branch union error."""
+    if isinstance(value, bool) or value is None:
+        return json.dumps(value)
+    if isinstance(value, float) and not value.is_integer():
+        return str(value)
+    return value
 
 
 # Ids are the integer primary keys the listings print as ``[N]``. The
 # schema says integer; a numeric string is accepted too (0.8 typed
-# some ids as strings), and anything else, true and false included,
-# gets _id()'s message rather than a pydantic one.
+# some ids as strings), and anything else, true, false and null
+# included, gets _id()'s message rather than a pydantic one.
 _Id = Annotated[
-    Union[int, str], BeforeValidator(_bool_as_text), WithJsonSchema({"type": "integer"})
+    Union[int, str], BeforeValidator(_id_as_text), WithJsonSchema({"type": "integer"})
+]
+
+
+def _none_or(value, handler):
+    """None as it is; anything else through the type's validation."""
+    return None if value is None else handler(value)
+
+
+# Optional free text, passed on as given. The annotation is plain str,
+# with null let through by the validator, because FastMCP JSON-decodes
+# a string argument of any other type: details='["a", "b"]' would
+# arrive as a list, and 'null' as None.
+_OptionalText = Annotated[
+    str,
+    WrapValidator(_none_or),
+    WithJsonSchema({"anyOf": [{"type": "string"}, {"type": "null"}]}),
 ]
 
 # Enumerations publish an ``enum`` in the schema, but are checked by
@@ -426,7 +449,7 @@ def _require_writes() -> None:
 
 
 @_tool("Create a collection", write=True)
-def create_collection(title: str, details: Optional[str] = None):
+def create_collection(title: str, details: _OptionalText = None):
     """
     Create a new collection in the user's Apple Books library.
     Requires write access and Books to be quit; a backup is taken
@@ -1195,8 +1218,8 @@ def get_annotation_context(
 
 @_tool("Annotations by date range")
 def get_annotations_by_date_range(
-    after: Optional[str] = None,
-    before: Optional[str] = None,
+    after: _OptionalText = None,
+    before: _OptionalText = None,
     limit: int = _ANNOTATION_PAGE,
     offset: int = 0,
     order_by: _Order = "newest",
