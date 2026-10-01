@@ -78,3 +78,20 @@ jobs:
       - run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
       - run: python3 scripts/build_mcpb.py --smoke mcpb-dist/*.mcpb
 
+  perf:
+    # Time, output-size, SQL and memory budgets on a 2,000-book,
+    # 50,000-annotation synthetic library (tests/test_perf_budgets.py),
+    # with the locked dependencies and with a fresh resolution, so a
+    # slower py-apple-books or mcp release shows up in the weekly run.
+    runs-on: ubuntu-latest
+    env:
+      APPLE_BOOKS_MCP_PERF: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Locked dependencies
+        run: uv run --locked --python 3.13 pytest -q tests/test_perf_budgets.py
+      - name: Fresh resolution
+        run: uv run --isolated --no-project --python 3.13 --with . --with pytest pytest -q tests/test_perf_budgets.py
