@@ -113,7 +113,9 @@ def main(verbose: int, enable_writes: bool, doctor: bool) -> None:
     mcp._mcp_server.version = __version__
     # Tools move to worker threads only with the cancel guard in place:
     # older mcp 1.x releases (1.6, for one) let the cancellation of any
-    # call that isn't blocking the event loop shut the server down.
+    # call that isn't blocking the event loop shut the server down, and
+    # every 1.x does when a cancel arrives just as a tool's thread
+    # finishes. (doctor._check_server reports the outcome of this.)
     if _cancel_guard.install():
         _runtime.install(mcp)
     else:

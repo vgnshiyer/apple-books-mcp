@@ -34,6 +34,7 @@ import logging
 import os
 
 import anyio
+import anyio.lowlevel
 import anyio.to_thread
 from anyio.lowlevel import RunVar
 
@@ -117,9 +118,15 @@ def _in_thread(fn, limiter, deadline):
 
     @functools.wraps(fn)
     async def call(**kwargs):
-        return await anyio.to_thread.run_sync(
+        result = await anyio.to_thread.run_sync(
             run, kwargs, abandon_on_cancel=True, limiter=limiter()
         )
+        # anyio doesn't interrupt a wait that is already over: a cancel
+        # that arrived as the thread finished is raised here, like any
+        # other, rather than the result being sent after "Request
+        # cancelled".
+        await anyio.lowlevel.checkpoint_if_cancelled()
+        return result
 
     return call
 
