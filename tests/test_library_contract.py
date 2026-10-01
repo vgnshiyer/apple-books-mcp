@@ -10,9 +10,12 @@ server to the library itself:
    ``create_autospec`` of the real ``PyAppleBooks`` and of the objects
    it returns. A call that doesn't fit a real signature fails, and so
    does reading an attribute the real class lacks, even through
-   ``getattr(obj, name, default)`` or inside a broad ``except``.
+   ``getattr(obj, name, default)`` or inside a broad ``except``, or
+   calling a facade method the fakes don't model.
 2. Every read tool runs end to end, with no mocks, against a synthetic
-   store built by ``py_apple_books.testing``.
+   store built by ``py_apple_books.testing``. No library call the tool
+   modules make there raises, unless the case expects it, even where
+   the tool turns the exception into ordinary text.
 3. The attributes the tool modules read off library objects (found in
    the source), the facade methods they call and the names they import
    from py_apple_books exist in the installed library.
@@ -27,10 +30,11 @@ import functools
 import importlib
 import inspect
 import pathlib
+import sys
 import types
 import typing
 from datetime import datetime
-from unittest.mock import create_autospec
+from unittest.mock import DEFAULT, create_autospec
 
 import pytest
 from mcp.server.fastmcp.exceptions import ToolError
@@ -38,6 +42,7 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import AnyUrl
 from py_apple_books import LibraryStats, PyAppleBooks
 from py_apple_books.content import BookContent, Chapter
+from py_apple_books.exceptions import BookNotDownloadedError, NotFoundError
 from py_apple_books.models import Annotation, Book, Collection
 from py_apple_books.models.location import Location
 from py_apple_books.models.manager import ModelIterable
@@ -225,6 +230,9 @@ class _Watch:
         # "Class.name" for every value a fake was given that the real
         # class lacks (left unset, so a read of it is a miss).
         self.stale = []
+        # Every call of a facade method _fake_library has no factory for
+        # (it answers with a bare mock, which proves nothing).
+        self.unmodelled = []
         # (class, fake) for every fake built.
         self.fakes = []
 
@@ -441,16 +449,30 @@ def _fake_library(watch, tier="toc"):
     for name in watch.known(PyAppleBooks, factories):
         make = factories[name]
         getattr(api, name).side_effect = lambda *args, _make=make, **kwargs: _make()
+    for name, _ in inspect.getmembers(PyAppleBooks, inspect.isfunction):
+        if not name.startswith("_") and name not in factories:
+            getattr(api, name).side_effect = (
+                lambda *args, _name=name, **kwargs: watch.unmodelled.append(_name) or DEFAULT
+            )
     return api, factories
+
+
+def _assert_modelled(watch):
+    assert watch.unmodelled == [], (
+        "the tools call these PyAppleBooks methods, which _fake_library has "
+        "no factory for; add one returning what the real method returns"
+    )
 
 
 def _facade_calls(api) -> list:
     """The facade methods ``api`` was called with, each call checked
     against the real method's signature (autospec checks it too; this
-    names the call when it doesn't fit)."""
+    names the call when it doesn't fit). Calls on the bare mock an
+    unmodelled method returns (``name().attr``) are skipped:
+    ``_assert_modelled`` reports the method."""
     names = []
     for name, args, kwargs in api.mock_calls:
-        if name.startswith("__"):
+        if name.startswith("__") or "." in name or "(" in name:
             continue
         method = getattr(PyAppleBooks, name)
         try:
@@ -509,6 +531,7 @@ def test_tool_against_autospecced_library(name, tier, monkeypatch):
         (result,) = _call_tools([(name, calls[name])])
         _ok_text(name, result)
 
+    _assert_modelled(watch)
     assert _facade_calls(api), f"{name} made no library call"
     assert watch.misses == [], "read attributes the real classes lack"
 
@@ -548,6 +571,7 @@ def test_every_library_call_in_the_source_succeeds(monkeypatch):
         _read_resource()
         called.update(_facade_calls(api))
 
+    _assert_modelled(watch)
     uncalled = sorted(_source_facade_names(TOOL_MODULES) - called)
     assert uncalled == [], (
         "the tool modules call these facade methods, but no tool reached them "
@@ -586,10 +610,69 @@ def demo_store(tmp_path_factory):
     return lib, seeded
 
 
+# The library classes the tool modules call into, with the special
+# methods they use on them (``list()``, ``len()``, ``bool()``, ``[i]``).
+_RECORDED = {
+    PyAppleBooks: (),
+    BookContent: (),
+    ModelIterable: ("__iter__", "__len__", "__bool__", "__getitem__"),
+}
+
+
+class _LibraryErrors:
+    """Records every exception a library call from the tool modules
+    raises: one a tool turns into ordinary text ("No book found ...",
+    "Could not list chapters: ...") still means the call failed. Calls
+    the library makes to itself aren't recorded, so an exception it
+    handles internally isn't either."""
+
+    def __init__(self):
+        # ("Class.method", exception) for each one that reached the MCP.
+        self.raised = []
+
+    def install(self, monkeypatch):
+        for cls, special in _RECORDED.items():
+            for name, method in list(vars(cls).items()):
+                if inspect.isfunction(method) and (
+                    not name.startswith("_") or name in special
+                ):
+                    monkeypatch.setattr(cls, name, self._wrap(cls, name, method))
+
+    def _wrap(self, cls, name, method):
+        label = f"{cls.__name__}.{name}"
+
+        @functools.wraps(method)
+        def call(*args, **kwargs):
+            try:
+                return method(*args, **kwargs)
+            except Exception as e:
+                caller = sys._getframe(1).f_globals.get("__name__", "")
+                if caller.split(".")[0] == apple_books_mcp.__name__:
+                    self.raised.append((label, e))
+                raise
+        return call
+
+    def unexpected(self, allowed=()) -> list:
+        """What was raised, less the ``(label, exception class)`` pairs
+        in ``allowed``."""
+        return [
+            f"{label}: {type(e).__name__}: {e}" for label, e in self.raised
+            if not any(label == ok and isinstance(e, kind) for ok, kind in allowed)
+        ]
+
+
 @pytest.fixture
-def demo(demo_store, monkeypatch):
-    """The server reading the demo store through a real PyAppleBooks;
-    yields the ids to call the tools with."""
+def library_errors(monkeypatch):
+    errors = _LibraryErrors()
+    errors.install(monkeypatch)
+    return errors
+
+
+@pytest.fixture
+def demo(demo_store, library_errors, monkeypatch):
+    """The server reading the demo store through a real PyAppleBooks,
+    its library calls recorded in ``library_errors``; yields the ids to
+    call the tools with."""
     lib, seeded = demo_store
     api = PyAppleBooks(data_dir=lib.data_dir)
     monkeypatch.setattr(server, "apple_books", api)
@@ -625,23 +708,48 @@ E2E_VARIANTS = {
 }
 
 
+# The library exceptions a case may meet, as ("Class.method", exception
+# class) pairs; any other is a failure. Annotation listings open each
+# annotated book for chapter labels, and the demo's finished book has
+# no local file.
+_NOT_DOWNLOADED = (("PyAppleBooks.get_book_content", BookNotDownloadedError),)
+E2E_EXPECTED_ERRORS = {
+    "list_all_annotations": _NOT_DOWNLOADED,
+    "recent_annotations": _NOT_DOWNLOADED,
+    "get_annotations_by_date_range": _NOT_DOWNLOADED,
+    "list_annotations-book_without_file": _NOT_DOWNLOADED,
+}
+
+
+def _assert_no_library_errors(case, library_errors):
+    unexpected = library_errors.unexpected(E2E_EXPECTED_ERRORS.get(case, ()))
+    assert unexpected == [], (
+        f"{case}: library calls failed on a real store; if the case "
+        "expects one, list it in E2E_EXPECTED_ERRORS"
+    )
+
+
 @pytest.mark.parametrize("name", list(_read_calls(FAKE_IDS)))
-def test_read_tool_end_to_end(name, demo):
+def test_read_tool_end_to_end(name, demo, library_errors):
     """Each read tool, with realistic arguments, returns a non-error
-    text result from a real store."""
+    text result from a real store, and every library call it makes
+    succeeds."""
     (result,) = _call_tools([(name, _read_calls(demo)[name])])
     _ok_text(name, result)
+    _assert_no_library_errors(name, library_errors)
 
 
 @pytest.mark.parametrize("label", list(E2E_VARIANTS))
-def test_read_tool_variant_end_to_end(label, demo):
+def test_read_tool_variant_end_to_end(label, demo, library_errors):
     name, values = E2E_VARIANTS[label]
     (result,) = _call_tools([(name, values(demo))])
     _ok_text(label, result)
+    _assert_no_library_errors(label, library_errors)
 
 
-def test_resource_end_to_end(demo):
+def test_resource_end_to_end(demo, library_errors):
     _read_resource()
+    _assert_no_library_errors(RESOURCE, library_errors)
 
 
 # Calls whose id names nothing in the demo store.
@@ -659,7 +767,7 @@ MISSING_IDS = {
 
 
 @pytest.mark.parametrize("name", list(MISSING_IDS))
-def test_missing_id_is_handled(name, demo):
+def test_missing_id_is_handled(name, demo, library_errors):
     """The not-found error the library raises for a missing id is one
     the tool handles: it answers, or raises a ToolError, but never lets
     the library's exception escape."""
@@ -667,6 +775,10 @@ def test_missing_id_is_handled(name, demo):
         getattr(server, name)(**MISSING_IDS[name])
     except ToolError:
         pass
+    # get_book_content signals not-found with a bare IndexError in 1.x.
+    assert any(isinstance(e, (NotFoundError, IndexError)) for _, e in library_errors.raised), (
+        f"{name}: the library raised no not-found error for an id naming nothing"
+    )
 
 
 # --------------------------------------------------------------------------
