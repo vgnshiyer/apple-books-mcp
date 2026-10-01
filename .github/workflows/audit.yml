@@ -1,21 +1,28 @@
 name: Audit
 
 # Known vulnerabilities in the dependencies the Claude Desktop extension
-# installs: it runs `uv sync --frozen --no-dev` against the bundled
-# uv.lock, so a stale lock ships as is. (uvx users resolve fresh.)
+# installs: Claude Desktop runs a plain `uv sync --quiet` against the
+# bundled uv.lock, so a stale lock ships as is. (uvx users resolve
+# fresh.) The bundled pyproject.toml sets no default groups, so that is
+# the locked set without the dev group, which `build_mcpb.py --smoke`
+# checks. Not covered: the build backend (hatchling and its
+# dependencies) uv fetches to install the project, which uv export
+# doesn't list.
 # Runs when the lock changes, weekly for new advisories, and before
 # every release (publish.yml calls it and won't publish if it fails).
 #
 # To accept an advisory the server can't reach, such as one in the HTTP
 # transports a stdio server never starts, add `--ignore-vuln ID` below
-# with the reason in a comment. Otherwise refresh the lock.
+# with the reason in a comment. Otherwise refresh the lock (`uv lock
+# --upgrade-package NAME`). An urgent hotfix blocked by an unrelated new
+# advisory takes the same two routes, in the hotfix's own PR.
 
 on:
   pull_request:
-    paths: [uv.lock, pyproject.toml]
+    paths: [uv.lock, pyproject.toml, .github/workflows/audit.yml]
   push:
     branches: [main]
-    paths: [uv.lock, pyproject.toml]
+    paths: [uv.lock, pyproject.toml, .github/workflows/audit.yml]
   schedule:
     - cron: "0 14 * * 1"
   workflow_dispatch:
