@@ -12,6 +12,7 @@ singletons and decoupled from ``server`` import order.
 
 from __future__ import annotations
 
+import html
 import logging
 import re
 from datetime import date, datetime, time
@@ -95,6 +96,38 @@ def _format_collection_row(collection) -> str:
 def _get_book_title(annotation) -> str:
     book = getattr(annotation, "book", None)
     return getattr(book, "title", None) or "Unknown Book"
+
+
+# --------------------------------------------------------------------------
+# Untrusted book text
+# --------------------------------------------------------------------------
+
+# A ``<book_text`` or ``</book_text`` tag, in any case, with optional
+# whitespace (zero-width characters included) around the slash.
+_BOOK_TEXT_TAG = re.compile(
+    r"<(?=[\s​-‍⁠﻿]*/?[\s​-‍⁠﻿]*book_text)",
+    re.IGNORECASE,
+)
+
+
+def _book_text(text: str, **attrs) -> str:
+    """Wrap text taken from a book (chapter text, a passage, the ToC,
+    the store description) in one ``<book_text ...>`` envelope. The
+    server instructions tell the model that what's inside is untrusted
+    content, never instructions.
+
+    A ``book_text`` tag inside ``text`` gets its ``<`` escaped, so a
+    crafted book can't close the envelope early. ``attrs`` (None
+    values skipped) become quoted attributes that say where the text
+    came from.
+    """
+    attributes = "".join(
+        f' {name}="{html.escape(str(value), quote=True)}"'
+        for name, value in attrs.items()
+        if value is not None
+    )
+    body = _BOOK_TEXT_TAG.sub("&lt;", text)
+    return f"<book_text{attributes}>\n{body}\n</book_text>"
 
 
 # ``_format_annotation_with_book`` (legacy) was dropped in v0.7.0 — it
