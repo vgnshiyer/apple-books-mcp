@@ -21,8 +21,9 @@ classifiers = [
 dependencies = [
     "click>=8.1.8",
     # The server is written against the mcp 1.x FastMCP API
-    # (mcp.server.fastmcp), which mcp 2.x removed.
-    "mcp>=1.6.0,<2",
+    # (mcp.server.fastmcp), which mcp 2.x removed. 1.10 is the first
+    # release whose tools take a title (and protocol 2025-06-18).
+    "mcp>=1.10.0,<2",
     "py-apple-books>=1.10,<2",
 ]
 
