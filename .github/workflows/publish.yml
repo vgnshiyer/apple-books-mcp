@@ -48,6 +48,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version: "0.12.17"
           enable-cache: false
 
       - name: Build the sdist and wheel
@@ -92,6 +93,7 @@ jobs:
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
+          version: "0.12.17"
           enable-cache: false
 
       # The packer and its dependencies exactly as mcpb/package-lock.json
