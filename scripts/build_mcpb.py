@@ -8,7 +8,8 @@ Usage:
       ready for `mcp-publisher publish DIR/server.json`.
   python scripts/build_mcpb.py --smoke BUNDLE
       Install BUNDLE the way Claude Desktop does (`uv sync` in the
-      unpacked bundle) and check the server it starts answers
+      unpacked bundle), check it installed exactly the locked runtime
+      dependencies, and check the server it starts answers
       initialize + tools/list (scripts/smoke_test.py).
   python scripts/build_mcpb.py --check-tag TAG
       Fail unless TAG is "v" plus the version and every version field
@@ -20,8 +21,9 @@ mcpb/manifest.json is the bundle's manifest minus "version" and
 "tools", which the build fills in from pyproject.toml and the server's
 registered tools. The bundle uses the manifest's "uv" server type:
 Claude Desktop installs uv, runs `uv sync` against the bundled
-pyproject.toml and uv.lock (the tested dependency set), and starts the
-server from mcp_config. No Python interpreter or packages are bundled.
+pyproject.toml and uv.lock (the tested dependency set; the bundled
+pyproject.toml leaves out the dev group), and starts the server from
+mcp_config. No Python interpreter or packages are bundled.
 
 Building needs the project's dependencies importable (to list the
 tools) and the official packer, installed from mcpb/package-lock.json
@@ -168,11 +170,29 @@ def render_manifest(version: str, tools: list) -> dict:
     return manifest
 
 
+def bundle_pyproject(text: str) -> str:
+    """pyproject.toml as bundled: with no default dependency groups.
+
+    Claude Desktop installs a "uv" bundle with a plain `uv sync`, which
+    also installs the default groups (dev: pytest and its dependencies)
+    into the user's extension. uv.lock doesn't record default-groups,
+    so the bundled lock still matches."""
+    if re.search(r"^default-groups\s*=", text, re.M):
+        raise SystemExit("pyproject.toml sets default-groups: "
+                         "update bundle_pyproject() in scripts/build_mcpb.py to match")
+    header = re.search(r"^\[tool\.uv\][ \t]*$", text, re.M)
+    if header:
+        return f"{text[:header.end()]}\ndefault-groups = []{text[header.end():]}"
+    return text.rstrip("\n") + "\n\n[tool.uv]\ndefault-groups = []\n"
+
+
 def stage(dest: Path, manifest: dict, root: Path = ROOT) -> Path:
     """Lay out the bundle's files in ``dest``."""
     dest.mkdir(parents=True, exist_ok=True)
     for name in BUNDLE_FILES:
         shutil.copy2(root / name, dest / name)
+    pyproject = dest / "pyproject.toml"
+    pyproject.write_text(bundle_pyproject(pyproject.read_text(encoding="utf-8")), encoding="utf-8")
     shutil.copytree(root / BUNDLE_PACKAGE, dest / BUNDLE_PACKAGE,
                     ignore=shutil.ignore_patterns("__pycache__", "*.pyc"))
     (dest / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
@@ -272,8 +292,17 @@ def smoke(bundle: Path) -> int:
         # this script happens to run in.
         base_env = {k: v for k, v in os.environ.items()
                     if k not in ("UV_PROJECT_ENVIRONMENT", "VIRTUAL_ENV")}
-        # What Claude Desktop runs when it installs a "uv" extension.
+        lock = (install / "uv.lock").read_bytes()
+        # What Claude Desktop runs when it installs a "uv" extension:
+        # not --locked, so a lock that doesn't match the bundled
+        # pyproject.toml would be quietly re-resolved.
         subprocess.run(["uv", "sync", "--quiet"], cwd=install, env=base_env, check=True)
+        if (install / "uv.lock").read_bytes() != lock:
+            raise SystemExit("uv sync re-resolved the bundled uv.lock: it doesn't match "
+                             "the bundled pyproject.toml")
+        # Exactly the locked runtime dependencies: no dev group.
+        subprocess.run(["uv", "sync", "--locked", "--no-dev", "--check"],
+                       cwd=install, env=base_env, check=True)
         argv, env = desktop_command(manifest, str(install))
         print(f"Starting: {' '.join(argv)} with {env}", flush=True)
         test = subprocess.Popen(
