@@ -4,6 +4,7 @@ next, and an empty result stays a normal answer.
 """
 import asyncio
 import os
+import time
 from unittest.mock import patch
 
 import pytest
@@ -40,6 +41,7 @@ from py_apple_books.testing import FixtureLibrary, write_epub
 
 from apple_books_mcp import server
 from apple_books_mcp.server import (
+    _shorten_quotes,
     create_collection,
     delete_collection,
     describe_annotation,
@@ -238,6 +240,36 @@ def test_long_quoted_names_are_cut(api):
     content.list_chapters.side_effect = AppleBooksError(f"Entry {name!r} is bad.")
     assert _message(lambda: list_book_chapters(5)) == (
         f'Could not list chapters: Entry "{name[:60]}…{name[-20:]}" is bad.')
+
+
+def test_long_messages_are_cut(api):
+    """A library message over 400 characters keeps its first 240 and
+    last 160, so a long title is cut even when an apostrophe in it
+    hides its quotes."""
+    message = ("'Ender's " + "x" * 500 + "' has not been downloaded to this Mac. "
+               "Open it in Apple Books to download a local copy, then try again.")
+    api.get_book_content.side_effect = BookNotDownloadedError(message)
+    assert _message(lambda: list_book_chapters(5)) == (
+        f"Book not available: {message[:240]}…{message[-160:]}")
+
+
+@pytest.mark.parametrize("title", [
+    "\\'" * 25_000 + "\\",
+    "x'" + '\\"' * 25_000,
+    ("'" + "a\\" * 50) * 1_000,
+])
+def test_error_text_takes_linear_time(api, title):
+    """Quoted names in a long message once made the cut quadratic: 6 s
+    for a 32k-character title, with the stdio server stalled."""
+    api.get_book_content.side_effect = BookNotDownloadedError(
+        f"'{title}' has not been downloaded to this Mac.")
+    start = time.perf_counter()
+    text = _message(lambda: get_chapter_content(5, "c1"))
+    assert time.perf_counter() - start < 0.5
+    assert len(text) < 450
+    start = time.perf_counter()
+    _shorten_quotes(f"'{title}' is long.")
+    assert time.perf_counter() - start < 0.5
 
 
 @pytest.mark.parametrize("message", [
