@@ -10,10 +10,11 @@ Usage:
       Install BUNDLE the way Claude Desktop does (`uv sync` in the
       unpacked bundle) and check the server it starts answers
       initialize + tools/list (scripts/smoke_test.py).
-  python scripts/build_mcpb.py --check-version VERSION
-      Fail unless every version field (pyproject.toml, __init__.py,
-      server.json, uv.lock) equals VERSION. The release workflow passes
-      the tag without its "v".
+  python scripts/build_mcpb.py --check-tag TAG
+      Fail unless TAG is "v" plus the version and every version field
+      (pyproject.toml, __init__.py, server.json and its PyPI package,
+      uv.lock) is present and holds that version. The release workflow
+      runs this on the release's tag before building anything.
 
 mcpb/manifest.json is the bundle's manifest minus "version" and
 "tools", which the build fills in from pyproject.toml and the server's
@@ -23,7 +24,7 @@ pyproject.toml and uv.lock (the tested dependency set), and starts the
 server from mcp_config. No Python interpreter or packages are bundled.
 
 Building needs the project's dependencies importable (to list the
-tools) and Node.js (for npx); --check-version needs only Python.
+tools) and Node.js (for npx); --check-tag needs only Python.
 """
 import argparse
 import asyncio
@@ -59,6 +60,16 @@ def bundle_name(version: str) -> str:
 
 # -- versions ---------------------------------------------------------------
 
+# Every place the release version is written. A field that can't be
+# found fails the checks rather than dropping out of them.
+VERSION_FIELDS = (
+    "pyproject.toml",
+    "apple_books_mcp/__init__.py",
+    "server.json version",
+    "server.json packages (pypi)",
+    "uv.lock",
+)
+
 def _pyproject_version(text: str):
     """[project] version, or None if it is dynamic or missing. A small
     parser rather than tomllib, which Python 3.10 lacks."""
@@ -82,9 +93,9 @@ def version_fields(root: Path = ROOT) -> dict:
         fields["apple_books_mcp/__init__.py"] = init.group(1)
     server = json.loads((root / "server.json").read_text(encoding="utf-8"))
     fields["server.json version"] = server.get("version")
-    for i, package in enumerate(server.get("packages", [])):
+    for package in server.get("packages", []):
         if "version" in package:
-            fields[f"server.json packages[{i}] ({package.get('registryType')})"] = package["version"]
+            fields[f"server.json packages ({package.get('registryType')})"] = package["version"]
     lock = re.search(r'^name = "apple-books-mcp"\nversion = "([^"]+)"',
                      (root / "uv.lock").read_text(encoding="utf-8"), re.M)
     if lock:
@@ -92,17 +103,29 @@ def version_fields(root: Path = ROOT) -> dict:
     return fields
 
 
+def _missing(fields: dict) -> dict:
+    return {place: "missing" for place in VERSION_FIELDS if place not in fields}
+
+
 def project_version(root: Path = ROOT) -> str:
     fields = version_fields(root)
     versions = set(fields.values())
-    if len(versions) != 1:
-        raise SystemExit("Version fields disagree:\n" + _describe(fields))
+    if _missing(fields) or len(versions) != 1:
+        raise SystemExit("Version fields disagree:\n" + _describe({**fields, **_missing(fields)}))
     return versions.pop()
 
 
-def version_mismatches(expected: str, root: Path = ROOT) -> dict:
-    """The version fields that aren't ``expected``."""
-    return {place: v for place, v in version_fields(root).items() if v != expected}
+def tag_problems(tag: str, root: Path = ROOT) -> dict:
+    """Why ``tag`` can't release this tree, as {place: what's wrong};
+    empty if the tag is "v" plus the version every field holds. The
+    bundle's URL in the release's server.json is built from that
+    version (release_server_json), so a tag without the "v" would leave
+    the registry pointing at a missing asset after PyPI had published."""
+    if not tag.startswith("v"):
+        return {"tag": f'{tag} (must be "v" followed by the version)'}
+    fields = version_fields(root)
+    wrong = {place: v for place, v in fields.items() if v != tag[1:]}
+    return {**wrong, **_missing(fields)}
 
 
 def _describe(fields: dict) -> str:
@@ -246,16 +269,16 @@ def main() -> int:
                        help="directory for the bundle and server.json (default: dist)")
     group.add_argument("--smoke", type=Path, metavar="BUNDLE",
                        help="install BUNDLE like Claude Desktop and smoke-test it")
-    group.add_argument("--check-version", metavar="VERSION",
-                       help="fail unless every version field equals VERSION")
+    group.add_argument("--check-tag", metavar="TAG",
+                       help='fail unless TAG is "v" plus the version in every version field')
     args = parser.parse_args()
 
-    if args.check_version is not None:
-        wrong = version_mismatches(args.check_version)
-        if wrong:
-            print(f"Release {args.check_version} doesn't match:\n{_describe(wrong)}", file=sys.stderr)
+    if args.check_tag is not None:
+        problems = tag_problems(args.check_tag)
+        if problems:
+            print(f"Release tag {args.check_tag} doesn't match:\n{_describe(problems)}", file=sys.stderr)
             return 1
-        print(f"All version fields are {args.check_version}:\n{_describe(version_fields())}")
+        print(f"Tag {args.check_tag} matches every version field:\n{_describe(version_fields())}")
         return 0
     if args.smoke is not None:
         return smoke(args.smoke)

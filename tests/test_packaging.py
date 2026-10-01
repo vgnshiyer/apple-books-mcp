@@ -57,25 +57,46 @@ def test_one_version_everywhere():
     """F51: tag v0.3.2 shipped 0.3.1 metadata. Every version field
     agrees, and the release workflow checks them against the tag."""
     fields = build_mcpb.version_fields()
-    assert {"pyproject.toml", "server.json version", "uv.lock"} <= set(fields)
+    assert set(fields) == set(build_mcpb.VERSION_FIELDS)
     assert len(set(fields.values())) == 1, fields
     assert apple_books_mcp.__version__ in fields.values()
 
 
-def _check_version(version):
+def _check_tag(tag):
     return subprocess.run(
-        [sys.executable, "scripts/build_mcpb.py", "--check-version", version],
+        [sys.executable, "scripts/build_mcpb.py", "--check-tag", tag],
         cwd=ROOT, capture_output=True, text=True, timeout=60,
     )
 
 
 def test_release_tag_guard():
     version = build_mcpb.project_version()
-    assert _check_version(version).returncode == 0
-    wrong = _check_version("0.0.0")
+    assert _check_tag("v" + version).returncode == 0
+    wrong = _check_tag("v0.0.0")
     assert wrong.returncode == 1
     assert "pyproject.toml: " + version in wrong.stderr
     assert "server.json version: " + version in wrong.stderr
+    # The bundle's release URL is .../download/v<version>/..., so the
+    # tag must be exactly that (this repo has tags without the "v").
+    for tag in (version, "V" + version, "v" + version + "-rc1"):
+        assert _check_tag(tag).returncode == 1, tag
+
+
+def test_release_tag_guard_missing_field(tmp_path):
+    """A version field the guard can't find fails it, rather than
+    quietly dropping out of the comparison."""
+    for name in ("pyproject.toml", "server.json", "uv.lock", "apple_books_mcp/__init__.py"):
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).write_text((ROOT / name).read_text(encoding="utf-8"), encoding="utf-8")
+    version = build_mcpb.project_version()
+    assert build_mcpb.tag_problems("v" + version, tmp_path) == {}
+    init = tmp_path / "apple_books_mcp" / "__init__.py"
+    init.write_text(re.sub(r'^__version__ = .*$', '__version__ = metadata_version()',
+                           init.read_text(encoding="utf-8"), flags=re.M), encoding="utf-8")
+    assert build_mcpb.tag_problems("v" + version, tmp_path) == \
+        {"apple_books_mcp/__init__.py": "missing"}
+    with pytest.raises(SystemExit):
+        build_mcpb.project_version(tmp_path)
 
 
 # -- Claude Desktop extension -------------------------------------------------

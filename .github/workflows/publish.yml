@@ -29,7 +29,7 @@ jobs:
       - name: Check the tag matches every version field
         env:
           TAG: ${{ github.event.release.tag_name }}
-        run: python3 scripts/build_mcpb.py --check-version "${TAG#v}"
+        run: python3 scripts/build_mcpb.py --check-tag "$TAG"
 
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
