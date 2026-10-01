@@ -30,8 +30,9 @@ def home(tmp_path, monkeypatch):
     for name in doctor._LIBRARY_ENV + (
             doctor.ENV_ENABLE_WRITES, doctor._TIMEOUT_ENV, _runtime.ENV_THREADS):
         monkeypatch.delenv(name, raising=False)
-    # The doctor installs the cancel guard to report the threads in use.
-    monkeypatch.setattr(RequestResponder, "__exit__", RequestResponder.__exit__)
+    # Should the doctor patch it after all, the next test gets it back.
+    for name in ("__exit__", "respond"):
+        monkeypatch.setattr(RequestResponder, name, getattr(RequestResponder, name))
     monkeypatch.setattr(write_safety, "books_is_running", lambda: False)
     monkeypatch.setattr(doctor, "_macos_version", lambda: "15.6")  # also on CI's Linux
     # Set from HOME when py-apple-books is imported.
@@ -91,7 +92,8 @@ def test_healthy_library(demo, home):
             f"{collections} collections in ") in out
     assert "ok    macOS 15.6" in out
     assert "the server loads (" in out
-    assert "note  tool calls run in worker threads, up to 8 at a time (APPLE_BOOKS_MCP_THREADS)" in out
+    assert ("note  tool calls run in worker threads, up to 8 at a time "
+            "(APPLE_BOOKS_MCP_THREADS); collection writes one at a time") in out
     assert "collection writes are off (add --enable-writes" in out
     assert "queries stop after 30 s (APPLE_BOOKS_QUERY_TIMEOUT)" in out
     assert "Apple Books is not running" in out
@@ -170,11 +172,40 @@ def test_writes_enabled_without_room_for_backups(demo, home, monkeypatch):
     assert not (home / ".py_apple_books").exists()
 
 
-def test_tools_on_the_event_loop(demo, monkeypatch):
-    monkeypatch.setenv(_runtime.ENV_THREADS, "0")
+def test_doctor_patches_and_moves_nothing(demo):
+    from apple_books_mcp.server import mcp
+
+    methods = RequestResponder.__exit__, RequestResponder.respond
+    fns = [tool.fn for tool in mcp._tool_manager.list_tools()]
     status, out = _doctor()
     assert status == 0, out
-    assert "note  tool calls run one at a time on the event loop" in out
+    assert (RequestResponder.__exit__, RequestResponder.respond) == methods
+    assert [tool.fn for tool in mcp._tool_manager.list_tools()] == fns
+
+
+@pytest.mark.parametrize("setup, reason", [
+    ("threads", "APPLE_BOOKS_MCP_THREADS=0"),
+    ("fastmcp", "FastMCP internals have changed"),
+    ("guard", "no cancel guard for mcp "),
+])
+def test_tools_on_the_event_loop(demo, monkeypatch, setup, reason):
+    # Reports what the server would do, for each reason it keeps tools
+    # on the event loop.
+    from apple_books_mcp import _cancel_guard
+
+    if setup == "threads":
+        monkeypatch.setenv(_runtime.ENV_THREADS, "0")
+    elif setup == "fastmcp":
+        monkeypatch.setattr(_runtime, "_parts", lambda server: None)
+    else:
+        monkeypatch.setattr(_cancel_guard, "_PATCHES", (
+            ("respond", {"no_such_attribute"}, None),
+        ))
+    status, out = _doctor()
+    assert status == 0, out
+    line = next(line for line in out.splitlines() if "tool calls run" in line)
+    assert line.startswith("  note  tool calls run one at a time on the event loop ("), out
+    assert reason in line
 
 
 def test_not_macos(demo, monkeypatch):
