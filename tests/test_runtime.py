@@ -7,6 +7,7 @@ calls return one at a time on the event loop.
 """
 import json
 import logging
+import os
 import threading
 import time
 
@@ -109,14 +110,18 @@ def test_install_moves_sync_tools_and_resources():
 
 def test_install_skips(monkeypatch):
     server = _toy_server()
+    assert _runtime.skip_reason(server, threads=2) is None
+    assert _runtime.skip_reason(server, threads=0) == "APPLE_BOOKS_MCP_THREADS=0"
     assert _runtime.install(server, threads=0) == 0
     assert not _tool(server, "where").is_async
 
     monkeypatch.setattr(_runtime, "_mcp_version", lambda: "2.2.0")
+    assert "only apply to mcp 1.x" in _runtime.skip_reason(server, threads=2)
     assert _runtime.install(server, threads=2) == 0
     assert not _tool(server, "where").is_async
 
     monkeypatch.setattr(_runtime, "_mcp_version", lambda: "1.99.0")
+    assert "internals have changed" in _runtime.skip_reason(object(), threads=2)
     assert _runtime.install(object(), threads=2) == 0
 
 
@@ -189,12 +194,14 @@ def test_calls_run_at_once_up_to_the_limit():
 
 def test_cancelled_call_returns_at_once_and_its_thread_finishes():
     server = FastMCP("runtime-test")
-    finished = threading.Event()
+    started, finished = [], threading.Event()
 
     @server.tool()
-    def slow():
-        time.sleep(1.0)
-        finished.set()
+    def slow(n: int):
+        started.append(n)
+        time.sleep(0.8)
+        if n == 1:
+            finished.set()
         return "late"
 
     _runtime.install(server, threads=1, deadline=None)
@@ -202,19 +209,91 @@ def test_cancelled_call_returns_at_once_and_its_thread_finishes():
     async def main():
         start = time.monotonic()
         with anyio.move_on_after(0.1):
-            await server.call_tool("slow", {})
+            await server.call_tool("slow", {"n": 1})
         cancelled_after = time.monotonic() - start
-        # The cancelled call gave up its turn: the next one starts at once.
+        # The next call is answered when cancelled too, but its function
+        # waits for the cancelled one's to finish: it keeps its turn.
         start = time.monotonic()
         with anyio.move_on_after(0.1):
-            await server.call_tool("slow", {})
+            await server.call_tool("slow", {"n": 2})
         return cancelled_after, time.monotonic() - start
 
     first, second = anyio.run(main)
-    assert first < 0.5
-    assert second < 0.5
+    assert first < 0.4
+    assert second < 0.4
     assert not finished.is_set()
     assert finished.wait(3)
+    # The second call was cancelled before its turn came: it never ran.
+    time.sleep(0.2)
+    assert started == [1]
+
+
+def test_cancelled_calls_do_not_exceed_the_limit():
+    # A host aborting parallel calls cancels running and queued ones
+    # together. The running functions can't be stopped, and keep their
+    # turns: no function of a queued call may start beside them.
+    server = FastMCP("runtime-test")
+    running, peak, ran, lock = [0], [0], [], threading.Lock()
+
+    @server.tool()
+    def busy(n: int):
+        with lock:
+            running[0] += 1
+            peak[0] = max(peak[0], running[0])
+            ran.append(n)
+        time.sleep(0.3)
+        with lock:
+            running[0] -= 1
+        return "done"
+
+    _runtime.install(server, threads=2, deadline=None)
+
+    async def main():
+        with anyio.move_on_after(0.1):
+            async with anyio.create_task_group() as tg:
+                for n in range(10):
+                    tg.start_soon(server.call_tool, "busy", {"n": n})
+        # A new call waits for the abandoned functions to finish.
+        start = time.monotonic()
+        await server.call_tool("busy", {"n": 99})
+        return time.monotonic() - start
+
+    waited = anyio.run(main)
+    assert peak[0] == 2
+    assert sorted(ran) == [0, 1, 99]
+    assert 0.4 < waited < 1.5
+
+
+def test_each_install_has_its_own_limit():
+    one, two = FastMCP("one"), FastMCP("two")
+    peaks = {}
+
+    def add_busy(server, name):
+        running, lock = [0], threading.Lock()
+        peaks[name] = 0
+
+        @server.tool()
+        def busy():
+            with lock:
+                running[0] += 1
+                peaks[name] = max(peaks[name], running[0])
+            time.sleep(0.2)
+            with lock:
+                running[0] -= 1
+
+    add_busy(one, "one")
+    add_busy(two, "two")
+    _runtime.install(one, threads=1, deadline=None)
+    _runtime.install(two, threads=3, deadline=None)
+
+    async def main():
+        async with anyio.create_task_group() as tg:
+            for server in (one, two):
+                for _ in range(3):
+                    tg.start_soon(server.call_tool, "busy", {})
+
+    anyio.run(main)
+    assert peaks == {"one": 1, "two": 3}
 
 
 @pytest.fixture
@@ -252,7 +331,7 @@ def test_deadline_stops_a_call_s_queries(fixture_library):
 def test_default_deadline_is_the_library_query_timeout(monkeypatch):
     seen = []
     monkeypatch.setattr(_runtime, "_in_thread",
-                        lambda fn, limiter, deadline: seen.append(deadline) or fn)
+                        lambda fn, turns, deadline, write=False: seen.append(deadline) or fn)
     server = FastMCP("runtime-test")
 
     @server.tool()
@@ -275,6 +354,79 @@ def test_every_server_tool_moves(monkeypatch):
             if hasattr(item, name):
                 monkeypatch.setattr(item, name, getattr(item, name))
     assert _runtime.install(mcp, threads=2, deadline=None) == len(tools)
+
+
+def test_write_tools_are_the_server_s():
+    from apple_books_mcp.server import mcp
+
+    names = {tool.name for tool in mcp._tool_manager.list_tools()}
+    assert _runtime.WRITE_TOOLS <= names
+    writes = {tool.name for tool in mcp._tool_manager.list_tools() if _runtime._writes(tool)}
+    assert writes == _runtime.WRITE_TOOLS
+
+
+@pytest.fixture
+def writable_server(tmp_path, monkeypatch):
+    """The server's tools in worker threads, writing to a FixtureLibrary
+    (Apple Books "not running"), backups in ``tmp_path / 'backups'``."""
+    from py_apple_books import PyAppleBooks
+    import py_apple_books.write_safety as write_safety
+
+    from apple_books_mcp import server
+
+    lib = FixtureLibrary.create(tmp_path / "home")
+    lib.populate(books=3, annotations_per_book=1)
+    api = PyAppleBooks(data_dir=lib.data_dir)
+    monkeypatch.setattr(server, "apple_books", api)
+    monkeypatch.setenv("APPLE_BOOKS_MCP_ENABLE_WRITES", "1")
+    monkeypatch.setattr(write_safety, "books_is_running", lambda: False)
+    monkeypatch.setattr(write_safety, "BACKUP_DIR", tmp_path / "backups")
+    for tool in server.mcp._tool_manager.list_tools():
+        for name in ("fn", "is_async"):
+            monkeypatch.setattr(tool, name, getattr(tool, name))
+    _runtime.install(server.mcp, threads=8, deadline=None)
+    yield server.mcp, api
+    api.close()
+
+
+def test_writes_made_at_once_share_one_backup(writable_server):
+    # py-apple-books reuses the backup taken before a burst's first
+    # write; writes running at once would each take one, and rotate
+    # older restore points away.
+    from py_apple_books.write_safety import BACKUP_KEEP, list_backups
+
+    mcp, api = writable_server
+    store = api.store_info()
+    folder = store.backup_dir
+    folder.mkdir(parents=True)
+    hour_ago = time.time() - 3600
+    stem = store.library_path.stem
+    older = []
+    for i in range(BACKUP_KEEP - 1):
+        path = folder / f"{stem}-20250101-0000{i:02d}-000000.sqlite"
+        path.write_bytes(store.library_path.read_bytes())
+        os.utime(path, (hour_ago, hour_ago))
+        older.append(path)
+    assert list_backups(store.library_path, folder) == older[::-1]
+
+    async def main():
+        results = []
+
+        async def create(n):
+            results.append(_texts(await mcp.call_tool("create_collection", {"title": f"Shelf {n}"})))
+
+        async with anyio.create_task_group() as tg:
+            for n in range(8):
+                tg.start_soon(create, n)
+        return results
+
+    results = anyio.run(main)
+    assert all(text[0].startswith("Created collection") for text in results), results
+    backups = list_backups(store.library_path, folder)
+    assert backups[1:] == older[::-1]  # none pruned
+    assert len(backups) == BACKUP_KEEP
+    titles = {c.title for c in api.list_collections()}
+    assert {f"Shelf {n}" for n in range(8)} <= titles
 
 
 # -- over stdio ---------------------------------------------------------------
