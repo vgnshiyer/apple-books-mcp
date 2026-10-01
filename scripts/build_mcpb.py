@@ -35,6 +35,7 @@ import json
 import os
 import re
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -275,10 +276,21 @@ def smoke(bundle: Path) -> int:
         subprocess.run(["uv", "sync", "--quiet"], cwd=install, env=base_env, check=True)
         argv, env = desktop_command(manifest, str(install))
         print(f"Starting: {' '.join(argv)} with {env}", flush=True)
-        return subprocess.run(
+        test = subprocess.Popen(
             [sys.executable, str(ROOT / "scripts" / "smoke_test.py"), *argv],
-            env={**base_env, **env},
-        ).returncode
+            env={**base_env, **env}, start_new_session=True,
+        )
+        try:
+            return test.wait()
+        finally:
+            # A server that ignores stdin closing (older mcp) gets `uv
+            # run` killed by smoke_test.py's watchdog, and uv can't pass
+            # SIGKILL on: the server would outlive the test. It is still
+            # in the test's process group.
+            try:
+                os.killpg(test.pid, signal.SIGKILL)
+            except (ProcessLookupError, PermissionError):
+                pass
 
 
 def main() -> int:
