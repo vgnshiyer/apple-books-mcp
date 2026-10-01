@@ -39,6 +39,31 @@ jobs:
       - run: uv run --locked apple-books-mcp --version
       - run: uv run --locked pytest -q
 
+  floor:
+    # The lowest versions pyproject.toml allows for its direct
+    # dependencies (mcp, py-apple-books, click) on the lowest Python.
+    # Dependabot moves uv.lock on, so without this nothing would test
+    # that the declared minimums still work.
+    runs-on: ubuntu-latest
+    env:
+      UV_PYTHON: "3.10"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      - name: Stub the Apple Books databases
+        run: |
+          d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
+          mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
+          touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
+      - run: uv venv
+      - run: uv pip install --resolution lowest-direct -e .
+      # Separately, or lowest-direct would pick an ancient pytest.
+      - run: uv pip install pytest
+      - run: uv pip list
+      - run: .venv/bin/python -m pytest -q
+
   smoke:
     # Installs the built wheel the way users do (uvx, fresh resolution, no
     # lockfile) and checks the server answers initialize + tools/list.
