@@ -95,7 +95,10 @@ jobs:
           enable-cache: false
 
       # The packer and its dependencies exactly as mcpb/package-lock.json
-      # pins them, without running their install scripts.
+      # pins them, without running their install scripts. npm audit
+      # reports tmp <=0.2.5 (GHSA-52f5-9888-hmc6, GHSA-ph9p-34f9-6g65)
+      # with no fix upstream: @inquirer/prompts loads it for its editor
+      # prompt, which nothing in the packer uses.
       - name: Install the MCPB packer
         run: npm ci --ignore-scripts --no-audit --no-fund --prefix mcpb
 
@@ -134,7 +137,9 @@ jobs:
 
   audit:
     # Known vulnerabilities in the dependencies the extension installs
-    # from uv.lock. A release can't ship a lock with open advisories.
+    # from uv.lock. A release can't ship a lock with open advisories,
+    # and nothing publishes until it passes: refresh uv.lock (or accept
+    # the advisory in audit.yml) before tagging, hotfixes included.
     permissions:
       contents: read
     uses: ./.github/workflows/audit.yml

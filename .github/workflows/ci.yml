@@ -100,9 +100,19 @@ jobs:
         with:
           persist-credentials: false
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+      # --no-audit: see the release workflow's packer step.
       - run: npm ci --ignore-scripts --no-audit --no-fund --prefix mcpb
       - run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
       - run: python3 scripts/build_mcpb.py --smoke mcpb-dist/*.mcpb
+      # The release validates the same file before publishing anything;
+      # this catches a server.json the registry rejects before it merges.
+      - name: Install mcp-publisher
+        run: |
+          curl -sSL -o mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+      - run: ./mcp-publisher validate mcpb-dist/server.json
 
   perf:
     # Time, output-size, SQL and memory budgets on a 2,000-book,
