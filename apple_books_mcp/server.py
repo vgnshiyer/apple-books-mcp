@@ -1122,7 +1122,8 @@ def describe_annotation(annotation_id: _Id):
 
 def _no_context_reason(anno) -> str:
     """Why the library found no passage around ``anno``. A book that
-    can't be opened (not downloaded, DRM) raises its own error here."""
+    can't be opened (not downloaded, DRM) or read (a missing, unsafe or
+    malformed file) raises its own error here."""
     if not anno.location or not anno.location.chapter_id:
         return (
             "this annotation has no CFI chapter hint "
@@ -1134,8 +1135,15 @@ def _no_context_reason(anno) -> str:
     selected = (getattr(anno, "selected_text", None) or "").strip()
     if not selected and not (getattr(anno, "representative_text", None) or "").strip():
         return "the annotation has no highlighted text (it only marks a place)."
-    if not _book_content(book.id).is_epub:
+    content = _book_content(book.id)
+    if not content.is_epub:
         return "only EPUB text can be read, and this book isn't an EPUB."
+    # The library also returns no passage when the chapter's file can't
+    # be read; reading it here raises the reason.
+    try:
+        content.get_chapter(anno.location.chapter_id)
+    except ChapterNotFoundError:
+        return "the highlight's chapter isn't in the book's file on this Mac."
     return "the highlighted text can't be found in the book's file on this Mac."
 
 
@@ -1188,7 +1196,11 @@ def get_annotation_context(
         # The library returns "" in several degraded cases — say which,
         # so Claude (or the user) knows whether to retry with a
         # different annotation or move on.
-        raise ToolError(f"No surrounding context available: {_no_context_reason(anno)}")
+        try:
+            reason = _no_context_reason(anno)
+        except AppleBooksError as e:
+            raise ToolError(_error_text(e, "Could not read annotation context: {e}")) from e
+        raise ToolError(f"No surrounding context available: {reason}")
 
     # Wrap the highlight with guillemets so Claude can see exactly which
     # span the user marked. Match with flexible whitespace — Apple
