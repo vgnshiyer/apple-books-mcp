@@ -36,11 +36,13 @@ from apple_books_mcp.utils import (
     _ANNOTATION_PAGE,
     _BOOK_PAGE,
     _PLAIN_CFI,
+    _book_matches,
     _book_text,
     _build_current_reading_section,
     _chapter_call_hint,
     _chapter_title_map,
     _date_range_label,
+    _deep_link,
     _format_book_row,
     _format_book_with_progress,
     _format_collection_row,
@@ -56,9 +58,12 @@ from apple_books_mcp.utils import (
     _plain_id,
     _probe_page,
     _query_page,
+    _readable_text,
     _reading_order_key,
+    _removed_book,
     _render_page,
     _resolve_current_chapter,
+    _search_needle,
     _untitled_chapter_line,
 )
 
@@ -75,6 +80,8 @@ as an integer book_id, annotation_id or collection_id. "(ch=...)" on a \
 highlight row is a chapter_id for get_chapter_content.
 - Paging: when a footer names an offset ("Next page: offset=N"), call \
 again with it.
+- get_chapter_content's chapter_id "current" (the default) is the \
+chapter the user is reading.
 - Times are in the Mac's local time zone; dates are YYYY-MM-DD.
 - Prefer the search and filter tools to list_all_* for specific questions.
 - Failures are error results naming this server's tools to call next; \
@@ -100,6 +107,9 @@ apple_books = PyAppleBooks()
 # and get_annotation_context at most this many on each side.
 _MAX_CHAPTER_CHARS = 50_000
 _MAX_CONTEXT_CHARS = 5_000
+
+# get_chapter_content's chapter_id for the chapter being read.
+_CURRENT = "current"
 
 
 # -- Parameter types --
@@ -179,7 +189,7 @@ def _color(color) -> str:
 _ERRORS = (
     (ToolError, "{e}"),
     (BookNotFoundError,
-     "{e} Use search_books_by_title or list_all_books to find book ids."),
+     "{e} Use search_books or list_all_books to find book ids."),
     (CollectionNotFoundError,
      "{e} Use list_all_collections or search_collections_by_title to find "
      "collection ids."),
@@ -616,7 +626,9 @@ def describe_book(book_id: _Id):
     """
     Describe a specific book in detail — metadata (title, author, genre,
     page count), reading status (progress, last opened, finished date),
-    and annotation count.
+    and annotation count. Also whether the chapter tools can read its
+    text (``Readable text:``, and why not), and an ``Open in Books:``
+    link (``ibooks://assetid/...``) that opens it in Apple Books.
 
     Args:
         book_id: The book's numeric ID.
@@ -660,6 +672,15 @@ def describe_book(book_id: _Id):
     if anno_count:
         lines.append(f"  Annotations: {anno_count}")
 
+    # From the library's records and file metadata; never reads the
+    # book (an iCloud-only one would download).
+    readable = _readable_text(apple_books, book)
+    if readable:
+        lines.append(f"  Readable text: {readable}")
+    link = _deep_link(book)
+    if link:
+        lines.append(f"  Open in Books: {link}")
+
     description = (getattr(book, "description", None) or "").strip()
     if description:
         lines.append("")
@@ -669,21 +690,65 @@ def describe_book(book_id: _Id):
     return TextContent(type="text", text="\n".join(lines))
 
 
-@_tool("Search books by title")
-def search_books_by_title(title: str):
+@_tool("Search books by title or author")
+def search_books(query: str, limit: int = _BOOK_PAGE, offset: int = 0):
     """
-    Search for books by title (substring match). Output is one row per
-    match: ``[id] title by author``. Use ``describe_book(id)`` for
-    details.
+    Search for books whose title or author contains ``query``, ignoring
+    case, accents and quote/dash style ("don't" finds "Don’t", "godel"
+    finds "Gödel"). Output is one row per book, by book id:
+    ``[id] title by author``. Use ``describe_book(id)`` for details.
+
+    Args:
+        query: Text to find in the title or the author's name.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging; a footer names the next
+            offset when there are more.
+    """
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    # py-apple-books 1.10 searches titles only, so every book in the
+    # library is matched here with the library's text fold (one query;
+    # Store series items you don't own stay out, as in list_all_books).
+    needle = _search_needle(query)
+    matches = {}
+    if needle is not None:
+        for book in apple_books.list_books():
+            if book.id not in matches and _book_matches(book, needle):
+                matches[book.id] = book
+    page = _list_page(sorted(matches.values(), key=lambda b: b.id), args.limit, args.offset)
+    text = _render_page(
+        page,
+        lambda books: "\n".join(_format_book_row(b) for b in books),
+        noun="books",
+        empty_message=f"No books matched {query!r} in title or author.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
+
+
+@_tool("Search books by title")
+def search_books_by_title(title: str, limit: int = _BOOK_PAGE, offset: int = 0):
+    """
+    Search for books by title (substring match, ignoring case, accents
+    and quote/dash style). Output is one row per match: ``[id] title by
+    author``. Use ``describe_book(id)`` for details, and
+    ``search_books`` to match authors too.
 
     Args:
         title: The title to search for.
+        limit: Max books to return (1–500, default 200).
+        offset: Books to skip, for paging; a footer names the next
+            offset when there are more.
     """
-    books = list(apple_books.get_book_by_title(title))
-    if not books:
-        return TextContent(type="text", text=f"No books matched {title!r}.")
-    lines = [_format_book_row(b) for b in books]
-    return TextContent(type="text", text="\n".join(lines))
+    args = _page_args(limit, offset, default=_BOOK_PAGE)
+    page = _query_page(apple_books.get_book_by_title(title), args.limit, args.offset)
+    text = _render_page(
+        page,
+        lambda books: "\n".join(_format_book_row(b) for b in books),
+        noun="books",
+        empty_message=f"No books matched {title!r}.",
+        notes=args.notes,
+    )
+    return TextContent(type="text", text=text)
 
 
 @_tool("Find books by genre")
@@ -834,8 +899,9 @@ def list_all_annotations(limit: int = _ANNOTATION_PAGE, offset: int = 0):
     page = _query_page(
         apple_books.list_annotations(order_by="-creation_date"), args.limit, args.offset
     )
-    # Grouped by book; orphans (asset_id → no book in the library) get
-    # a dedicated tail section. Chapter titles resolve once per book.
+    # Grouped by book; annotations of books no longer in the library
+    # follow, one group per removed book. Chapter titles resolve once
+    # per book.
     chapter_maps: dict = {}
     text = _render_page(
         page,
@@ -992,8 +1058,9 @@ def search_annotations(
     """
     Search across every annotation field — selected (highlighted) text,
     the surrounding paragraph, and the user's note body. Grouped by
-    book. Use ``search_notes`` when you only want to find your own
-    written notes.
+    book; a row's note, if any, is on a second line prefixed with
+    ``↳ note:``. Use ``search_notes`` when you only want to find your
+    own written notes.
 
     Args:
         text: Substring to match anywhere in an annotation.
@@ -1016,7 +1083,10 @@ def search_annotations(
     body = _render_page(
         page,
         lambda annotations: _format_grouped_by_book(
-            apple_books, annotations, chapter_maps=chapter_maps
+            apple_books,
+            annotations,
+            row_formatter=_format_note_row,
+            chapter_maps=chapter_maps,
         ),
         noun="matches",
         empty_message=f"No annotations matched {text!r}.",
@@ -1060,9 +1130,10 @@ def recent_annotations(limit: int = 10, offset: int = 0):
 @_tool("Describe an annotation")
 def describe_annotation(annotation_id: _Id):
     """
-    Describe a specific annotation in detail — text, note, book,
-    chapter, color, creation date. For the passage around the
-    highlight, call ``get_annotation_context`` instead.
+    Describe a specific annotation in detail — text, note, book (with
+    an ``Open in Books:`` link), chapter, color, creation date. For the
+    passage around the highlight, call ``get_annotation_context``
+    instead.
 
     Args:
         annotation_id: The annotation's numeric ID.
@@ -1070,8 +1141,15 @@ def describe_annotation(annotation_id: _Id):
     anno = apple_books.get_annotation_by_id(_id("annotation_id", annotation_id))
 
     book = getattr(anno, "book", None)
-    book_title = getattr(book, "title", None) or "(book no longer in library)"
-    book_author = getattr(book, "author", None) or "?"
+    if book is not None:
+        book_title = getattr(book, "title", None) or "Unknown Title"
+        book_author = getattr(book, "author", None) or "Unknown Author"
+        book_line = f"{book_title} ({book_author})"
+    else:
+        book_line = (
+            f"{_removed_book(getattr(anno, 'asset_id', None))}, "
+            "no longer in the library"
+        )
 
     # Resolve chapter title via the CFI, same as the listing tools.
     chapter_title = ""
@@ -1086,8 +1164,13 @@ def describe_annotation(annotation_id: _Id):
 
     lines = [
         f"Annotation {anno.id}",
-        f"  Book:     {book_title} ({book_author})",
+        f"  Book:     {book_line}",
     ]
+    # The book's link only: whether Books jumps to a CFI fragment is
+    # unverified.
+    link = _deep_link(book)
+    if link:
+        lines.append(f"  Open in Books: {link}")
     # Show both the human title and the id so Claude can pass chapter_id
     # directly to get_chapter_content without rescanning the ToC. An
     # id from the book that isn't a plain name is left out, and so is
@@ -1107,11 +1190,14 @@ def describe_annotation(annotation_id: _Id):
     rep = (getattr(anno, "representative_text", None) or "").strip()
     note = (getattr(anno, "note", None) or "").strip()
 
-    if selected:
+    if selected or rep or note:
         lines.append("")
+    if selected:
         lines.append(f'  Highlighted: "{selected}"')
     if rep and rep != selected:
-        lines.append(f'  In context:  "{rep}"')
+        # Apple's copy of the surrounding passage: text from the book.
+        lines.append("  In context:")
+        lines.append(_book_text(rep, book_id=getattr(book, "id", None), annotation_id=anno.id))
     if note:
         lines.append(f"  Note:        {note}")
 
@@ -1328,7 +1414,7 @@ def list_book_chapters(book_id: _Id):
 @_tool("Get chapter text")
 def get_chapter_content(
     book_id: _Id,
-    chapter_id: str,
+    chapter_id: str = _CURRENT,
     offset: int = 0,
     max_chars: int = 10000,
 ):
@@ -1336,8 +1422,9 @@ def get_chapter_content(
     Return the plain-text content of a chapter, paginated by default
     to protect the context window. Get ``chapter_id`` from
     ``list_book_chapters`` or from the ``(ch=...)`` suffix on
-    annotation listing rows. Works for non-DRM EPUBs downloaded to
-    this Mac.
+    annotation listing rows, or pass ``"current"`` (the default) for
+    the chapter the user is reading in Apple Books. Works for non-DRM
+    EPUBs downloaded to this Mac.
 
     Default ``max_chars=10000`` (~2500 words) fits most chapters in
     one call. Longer chapters return a slice with a footer naming
@@ -1353,8 +1440,10 @@ def get_chapter_content(
 
     Args:
         book_id: The book's numeric ID.
-        chapter_id: Chapter identifier, or the 1-based chapter order
-            as a string (e.g. ``"5"``).
+        chapter_id: Chapter identifier, the 1-based chapter order as a
+            string (e.g. ``"5"``), or ``"current"`` (the default): the
+            chapter of the user's reading position. A chapter whose id
+            is literally "current" wins.
         offset: Character offset to start from. Defaults to 0.
         max_chars: Max chars to return (1–50000). Default 10000.
     """
@@ -1366,8 +1455,16 @@ def get_chapter_content(
         raise ToolError("max_chars must be a positive integer.")
 
     content = _book_content(book_id)
+    current = False
     try:
-        text = content.get_chapter(chapter_id)
+        try:
+            text = content.get_chapter(chapter_id)
+        except ChapterNotFoundError:
+            if not _is_current(chapter_id):
+                raise
+            chapter_id = _current_chapter_id(book_id)
+            text = _current_chapter_text(content, book_id, chapter_id)
+            current = True
     except ChapterNotFoundError as e:
         raise ToolError(
             f"{e} list_book_chapters({book_id}) lists this book's chapters."
@@ -1378,7 +1475,10 @@ def get_chapter_content(
     if not text.strip():
         return TextContent(
             type="text",
-            text="(This chapter has no extractable text — likely an image-only page.)",
+            text=(
+                "(This chapter has no extractable text — likely an image-only page.)"
+                + (_current_chapter_note(content, chapter_id) if current else "")
+            ),
         )
 
     total_chars = len(text)
@@ -1420,16 +1520,74 @@ def get_chapter_content(
             f"[{returned} chars]. End of chapter.)"
         )
 
+    if current:
+        cap_note += _current_chapter_note(content, chapter_id, more=remaining > 0)
     body = _book_text(sliced, book_id=book_id, chapter_id=chapter_id, offset=offset)
     return TextContent(type="text", text=f"{body}\n\n{footer}{cap_note}")
+
+
+def _is_current(chapter_id) -> bool:
+    """Whether ``chapter_id`` asks for the current chapter: "current",
+    in any case, spaces around it ignored."""
+    return isinstance(chapter_id, str) and chapter_id.strip().lower() == _CURRENT
+
+
+def _current_chapter_id(book_id: int) -> str:
+    """The chapter id on the book's reading position (Apple Books'
+    reading bookmark), which py-apple-books' get_current_reading_chapter
+    resolves to a ToC chapter; here a spine item the ToC doesn't list
+    counts too, as in get_current_reading_position. A ToolError when
+    there is no position."""
+    bookmark = apple_books.get_current_reading_location(book_id)
+    location = getattr(bookmark, "location", None) if bookmark is not None else None
+    if not location or not location.chapter_id:
+        raise ToolError(
+            "Apple Books has no reading position for this book yet, so there "
+            f"is no current chapter. list_book_chapters({book_id}) lists its "
+            "chapters; pass one's id as chapter_id."
+        )
+    return location.chapter_id
+
+
+def _current_chapter_text(content, book_id: int, chapter_id: str) -> str:
+    """The text of the reading position's chapter."""
+    try:
+        return content.get_chapter(chapter_id)
+    except ChapterNotFoundError:
+        raise ToolError(
+            "Your reading position is in a chapter this book's file on this "
+            f"Mac doesn't have. list_book_chapters({book_id}) lists its "
+            "chapters."
+        ) from None
+
+
+def _current_chapter_note(content, chapter_id: str, more: bool = False) -> str:
+    """Which chapter "current" read and, when there is ``more``, the id
+    to page on with, so a reading position that moves between calls
+    can't switch chapters. An id from the book that isn't a plain name
+    is shown as the chapter's order, or not at all."""
+    shown = _plain_id(chapter_id)
+    if shown is None:
+        try:
+            shown = next(
+                (str(c.order) for c in content.list_chapters() if c.id == chapter_id), None
+            )
+        except AppleBooksError:
+            shown = None
+    if shown is None:
+        return "\n(chapter_id \"current\" read the chapter of your reading position.)"
+    note = f"\n(chapter_id \"current\" read chapter {shown}, from your reading position."
+    if more:
+        note += f" Pass chapter_id=\"{shown}\" with the next offset."
+    return note + ")"
 
 
 @_tool("Current reading position")
 def get_current_reading_position(book_id: _Id):
     """
     Return where the user last left off reading a book — chapter
-    title and chapter_id, no text. Follow up with
-    ``get_chapter_content`` for the text.
+    title and chapter_id, no text — and an ``Open in Books:`` link to
+    the book. Follow up with ``get_chapter_content`` for the text.
 
     Works for non-DRM EPUBs downloaded to this Mac. If Apple Books
     hasn't recorded a position, falls back to inferring from the
@@ -1445,15 +1603,16 @@ def get_current_reading_position(book_id: _Id):
     except AppleBooksError as e:
         raise ToolError(_error_text(e, "Could not resolve position: {e}")) from e
 
+    link = _deep_link(book)
+    link_line = [f"Open in Books: {link}"] if link else []
+
     if resolution is None:
-        return TextContent(
-            type="text",
-            text=(
-                "No reading position and no highlights yet — open the "
-                "book to a chapter and read or highlight something, "
-                "then try again."
-            ),
-        )
+        lines = [
+            "No reading position and no highlights yet — open the "
+            "book to a chapter and read or highlight something, "
+            "then try again.",
+        ]
+        return TextContent(type="text", text="\n".join(lines + link_line))
 
     # The chapter title comes from the book, so it is in an envelope;
     # its id is shown outside only when it is a plain name.
@@ -1474,7 +1633,7 @@ def get_current_reading_position(book_id: _Id):
             "  (inferred from your most recent highlight — Apple Books hasn't "
             "recorded a CFI on the reading bookmark yet)"
         )
-    return TextContent(type="text", text="\n".join(lines))
+    return TextContent(type="text", text="\n".join(lines + link_line))
 
 
 # -- Library Stats Tools --
@@ -1504,13 +1663,34 @@ def get_library_stats():
         f"Total annotations: {stats.total_annotations}",
     ]
     if stats.orphan_annotations:
-        lines.append(
-            f"  ({stats.orphan_annotations} from books no longer in the library)"
-        )
+        count = stats.orphan_annotations
+        removed = _removed_book_count()
+        if removed:
+            lines.append(
+                f"  ({count} highlight{'' if count == 1 else 's'} from {removed} "
+                f"removed book{'' if removed == 1 else 's'}, no longer in the library)"
+            )
+        else:
+            lines.append(f"  ({count} from books no longer in the library)")
     lines.append("Most annotated books:")
     lines.append(top_str if top_annotated else "  (none)")
 
     return TextContent(type="text", text="\n".join(lines))
+
+
+def _removed_book_count():
+    """How many removed books the library's annotations come from: the
+    asset ids annotations have and no book row has (as for
+    ``annotation.book``, Store series items count as books), with no
+    asset id counted as one. Two GROUP BY queries. None if that can't
+    be counted."""
+    try:
+        books = apple_books.list_books(include_store_series=True).count_by("asset_id")
+        annotated = apple_books.list_annotations().count_by("asset_id")
+    except Exception as e:
+        logger.warning("removed books not counted: %s", e)
+        return None
+    return len({asset or None for asset in annotated if not asset or asset not in books})
 
 
 # -- Resources --
@@ -1519,10 +1699,11 @@ def get_library_stats():
     name="Currently Reading",
     description=(
         "A short pointer (a few hundred chars) to the in-progress book "
-        "you opened most recently: its title, author, book id and "
-        "reading progress, the chapter you left off on (title and "
-        "chapter_id, or inferred from your latest highlight when Books "
-        "hasn't recorded a position), and how many highlights it has. "
+        "you opened most recently: its title, author, book id, reading "
+        "progress and an Open in Books link, the chapter you left off "
+        "on (title and chapter_id, or inferred from your latest "
+        "highlight when Books hasn't recorded a position; or why its "
+        "text can't be read), and how many highlights it has. "
         "It holds no chapter text and no highlight text; Claude fetches "
         "those on demand with get_chapter_content, list_annotations "
         "and get_annotation_context."
@@ -1561,6 +1742,9 @@ def _currently_reading() -> str:
         f"  Book id: {book.id}",
         f"  {book.format_progress_summary()}",
     ]
+    link = _deep_link(book)
+    if link:
+        sections.append(f"  Open in Books: {link}")
 
     # Current chapter pointer — metadata only, no text.
     reading_section = _build_current_reading_section(apple_books, book)
@@ -1623,7 +1807,7 @@ def revisit_book(book_title: str) -> str:
     """Revisit your notes and highlights from a specific book."""
     return (
         f"I want to revisit my notes on \"{book_title}\".\n\n"
-        f"1. Call `search_books_by_title` with \"{book_title}\" to find it.\n"
+        f"1. Call `search_books` with \"{book_title}\" to find it.\n"
         "2. Call `list_annotations` with the book's ID and `limit=200` to pull its "
         "highlights in reading order (each as id + text + chapter, with any note I "
         "wrote on a `↳ note:` line below it). If the output ends with a "

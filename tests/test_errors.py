@@ -80,7 +80,7 @@ def _message(call):
 
 READ_ERRORS = [
     (BookNotFoundError("No book with id 5."),
-     "No book with id 5. Use search_books_by_title or list_all_books to find book ids."),
+     "No book with id 5. Use search_books or list_all_books to find book ids."),
     (InvalidArgumentError("limit must be >= 0."), "limit must be >= 0."),
     (UnknownFieldError("Book", "bogus", ["id", "title"]),
      "Book has no field 'bogus'. Valid fields: id, title."),
@@ -142,7 +142,7 @@ def test_unknown_color_is_checked_before_the_library(api):
 @pytest.mark.parametrize("error, message", [
     # py-apple-books 1.x: a bare IndexError for an unknown id.
     (IndexError("No book with id 5."),
-     "No book with id 5. Use search_books_by_title or list_all_books to find book ids."),
+     "No book with id 5. Use search_books or list_all_books to find book ids."),
     (BookNotDownloadedError("'T' has not been downloaded to this Mac."),
      "Book not available: 'T' has not been downloaded to this Mac."),
     (NotInLibraryError("'T' is an Apple Books Store series item."),
@@ -424,10 +424,12 @@ def test_failures_are_errors_and_empty_results_are_not(library):
     assert _call("describe_book", {"book_id": 999999}) == (
         True,
         "Error executing tool describe_book: No book with id 999999. Use "
-        "search_books_by_title or list_all_books to find book ids.",
+        "search_books or list_all_books to find book ids.",
     )
     assert _call("search_books_by_title", {"title": "absent"}) == (
         False, "No books matched 'absent'.")
+    assert _call("search_books", {"query": "absent"}) == (
+        False, "No books matched 'absent' in title or author.")
     assert _call("get_highlights_by_color", {"color": "pink"}) == (
         False, "No pink highlights.")
 

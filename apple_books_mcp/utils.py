@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import html
 import logging
+import os
 import re
 import unicodedata
 from datetime import date, datetime, time
@@ -97,6 +98,213 @@ def _format_collection_row(collection) -> str:
 def _get_book_title(annotation) -> str:
     book = getattr(annotation, "book", None)
     return getattr(book, "title", None) or "Unknown Book"
+
+
+# --------------------------------------------------------------------------
+# Book search (title or author)
+# --------------------------------------------------------------------------
+
+# A copy of py-apple-books 1.10's text fold (py_apple_books.text
+# .fold_for_match, which its ``__search`` lookups apply to both sides in
+# SQL), so a match in Python agrees with search_books_by_title's in the
+# library. That module isn't public API, and 1.10 has no author search;
+# tests/test_search_books.py checks the copy against the library's.
+_FOLD_WHITESPACE = re.compile(r"\s+")
+_FOLD_MAP: dict = {}
+for _ch in "’‘‚‛′‵‹›ʼ＇":
+    _FOLD_MAP[ord(_ch)] = "'"
+for _ch in "“”„‟″‶«»＂":
+    _FOLD_MAP[ord(_ch)] = '"'
+for _ch in "‐‑‒–—―−﹘﹣－":
+    _FOLD_MAP[ord(_ch)] = "-"
+# Soft hyphen, zero-width space / non-joiner / joiner, word joiner, BOM.
+for _cp in (0x00AD, 0x200B, 0x200C, 0x200D, 0x2060, 0xFEFF):
+    _FOLD_MAP[_cp] = None
+# Combining accents, split off by NFKD (Gödel -> godel).
+for _cp in range(0x0300, 0x0370):
+    _FOLD_MAP[_cp] = None
+del _ch, _cp
+
+
+def _fold(text) -> Optional[str]:
+    """``text`` folded for matching: lower case (casefold), no accents,
+    one kind of quote and dash, whitespace runs as one space. None stays
+    None. Same rules as the library's fold, in the same order."""
+    if text is None:
+        return None
+    if not isinstance(text, str):
+        text = str(text)
+    if text.isascii():
+        return _FOLD_WHITESPACE.sub(" ", text).lower()
+    try:
+        text.encode("utf-8")
+    except UnicodeEncodeError:
+        text = text.encode("utf-8", "surrogatepass").decode("utf-8", "replace")
+    text = unicodedata.normalize("NFKD", text.casefold()).casefold().translate(_FOLD_MAP)
+    return _FOLD_WHITESPACE.sub(" ", unicodedata.normalize("NFC", text))
+
+
+def _search_needle(query) -> Optional[str]:
+    """``query`` folded, or None when it can match nothing: as in the
+    library, a query whose visible characters all fold away (accents
+    alone, zero-width characters) finds nothing rather than everything.
+    An empty query matches every non-empty value."""
+    needle = _fold(query)
+    if needle is None or (str(query).strip() and not needle.strip()):
+        return None
+    return needle
+
+
+def _book_matches(book, needle: str) -> bool:
+    """Whether ``needle`` (from :func:`_search_needle`) is in the book's
+    title or author, folded. A missing title or author matches nothing."""
+    for value in (getattr(book, "title", None), getattr(book, "author", None)):
+        folded = _fold(value)
+        if folded is not None and needle in folded:
+            return True
+    return False
+
+
+# --------------------------------------------------------------------------
+# Apple Books deep links and removed books
+# --------------------------------------------------------------------------
+
+# An asset id as Books makes them (32 hex digits for an imported book,
+# digits for a Store title). A link or a label is shown only for an id
+# like that, so nothing odd from the database ends up in a URL.
+_ASSET_ID = re.compile(r"[A-Za-z0-9][A-Za-z0-9._-]{0,127}")
+_LINK_PREFIX = "ibooks://assetid/"
+
+
+def _deep_link(book) -> Optional[str]:
+    """``ibooks://assetid/<asset id>`` (py-apple-books' ``Book.deep_link``),
+    which opens the book in Books.app; None for no book, or an asset id
+    that isn't plain."""
+    asset_id = getattr(book, "asset_id", None)
+    link = getattr(book, "deep_link", None)
+    if not isinstance(asset_id, str) or not _ASSET_ID.fullmatch(asset_id):
+        return None
+    if link != f"{_LINK_PREFIX}{asset_id}":
+        return None
+    return link
+
+
+def _removed_book(asset_id, *, count: Optional[int] = None, short: bool = False) -> str:
+    """How output names a book that is no longer in the library (its
+    annotations stay in Apple Books): by the first 8 characters of its
+    asset id, the same in every tool.
+
+    ``Removed book (asset 3F2A1B2C…)``; with ``count``, ``Removed book
+    (asset 3F2A1B2C…, 3 highlights on this page)``; ``short``: ``removed
+    book 3F2A1B2C…``, for the end of a row.
+    """
+    if isinstance(asset_id, str) and _ASSET_ID.fullmatch(asset_id):
+        tag = asset_id if len(asset_id) <= 8 else f"{asset_id[:8]}…"
+    else:
+        tag = None
+    if short:
+        return f"removed book {tag}" if tag else "removed book"
+    label = f"asset {tag}" if tag else "no asset id"
+    if count is not None:
+        label += f", {count} highlight{'' if count == 1 else 's'} on this page"
+    return f"Removed book ({label})"
+
+
+# --------------------------------------------------------------------------
+# Whether a book's text can be read (describe_book's "Readable text")
+# --------------------------------------------------------------------------
+
+# Worded like the errors the chapter tools give for each case.
+_READABLE = "yes (EPUB)"
+_PDF = "no (PDF; the chapter tools read EPUB books only)"
+_OTHER_FORMAT = "no (not an EPUB book; the chapter tools read EPUB books only)"
+_DRM = "no (DRM-protected; readable only in Apple Books)"
+_IN_ICLOUD = "not downloaded (in iCloud only; open it in Books to download it)"
+_STORE_TITLE = (
+    "not downloaded (Apple Books Store title; Store purchases are usually "
+    "DRM-protected)"
+)
+_NO_FILE = "not downloaded (open it in Books to download it)"
+_MISSING = "no (the book's file is missing)"
+_SERIES_ITEM = (
+    "no (an Apple Books Store series item that isn't in your library; there "
+    "is no book file)"
+)
+
+# st_flags bit macOS sets on a file or folder whose data is in iCloud
+# only (SF_DATALESS).
+_SF_DATALESS = 0x40000000
+
+
+def _readable_text(api: "PyAppleBooks", book) -> Optional[str]:
+    """Whether the chapter tools can read ``book``, and if not why, as
+    describe_book's ``Readable text:`` value; None if that can't be told
+    (the line is left out then: this never raises).
+
+    Reads no book content and no byte of a file that may be in iCloud
+    only, since reading an evicted file makes macOS download it: it
+    goes by the library's records first (Books' iCloud-only state, the
+    file path, the Store id), then file metadata (``lstat``), and only
+    for a book on disk asks the library to open it, which checks the
+    download state from metadata and only then looks for DRM, as the
+    chapter tools do. Never claims a book is an audiobook: py-apple-books
+    1.10 has no reliable signal for one.
+    """
+    try:
+        return _readability(api, book)
+    except Exception as e:
+        logger.debug("readability unavailable: %s", e)
+        return None
+
+
+def _readability(api: "PyAppleBooks", book) -> str:
+    # Books' own record first, before the file system is touched.
+    if getattr(book, "is_cloud_only", False) is True:
+        return _IN_ICLOUD
+    series_item = getattr(book, "is_store_series_item", False) is True
+    store = bool(getattr(book, "store_id", None))
+    path = getattr(book, "path", None)
+    if not path:
+        if series_item:
+            return _SERIES_ITEM
+        return _STORE_TITLE if store else _NO_FILE
+    path = os.fspath(path)
+    try:
+        flags = getattr(os.lstat(path), "st_flags", 0)
+    except FileNotFoundError:
+        # Older iCloud Drive leaves a ".<name>.icloud" stub in place of
+        # an evicted file.
+        folder, name = os.path.split(path.rstrip("/"))
+        if os.path.lexists(os.path.join(folder, f".{name}.icloud")):
+            return _IN_ICLOUD
+        if series_item:
+            return _SERIES_ITEM
+        return _STORE_TITLE if store else _MISSING
+    if flags & _SF_DATALESS:
+        return _IN_ICLOUD
+    if not os.path.exists(path):  # a link to nothing
+        return _MISSING
+    # The library's DRM check reads META-INF/encryption.xml inside an
+    # EPUB bundle; a bundle iCloud evicted in part can have that file
+    # in iCloud only while the folder itself is not.
+    try:
+        inner = os.lstat(os.path.join(path, "META-INF", "encryption.xml"))
+    except OSError:
+        pass
+    else:
+        if getattr(inner, "st_flags", 0) & _SF_DATALESS:
+            return _IN_ICLOUD
+    try:
+        content = api.get_book_content(book.id)
+    except DRMProtectedError:
+        return _DRM
+    except BookNotDownloadedError:
+        return _IN_ICLOUD
+    if content.is_epub:
+        return _READABLE
+    if content.is_pdf:
+        return _PDF
+    return _OTHER_FORMAT
 
 
 # --------------------------------------------------------------------------
@@ -365,10 +573,11 @@ def _format_grouped_by_book(
     """Render a list of annotations grouped by their originating book.
 
     Each book gets a header line (``Book Title (Author):`` by default)
-    followed by one :func:`_format_lean_row` per annotation. Orphan
-    annotations (whose ``asset_id`` no longer maps to a book in the
-    library) accumulate into a trailing "Unassigned" section rather
-    than being dropped silently.
+    followed by one :func:`_format_lean_row` per annotation. Annotations
+    whose book is no longer in the library (no book has their
+    ``asset_id``) are grouped per asset id after the library's books, in
+    the order they first appear, each under a :func:`_removed_book`
+    header that counts its rows on this page.
 
     :param api: Facade instance; needed to look up each book's chapter
         titles for CFI resolution.
@@ -401,11 +610,12 @@ def _format_grouped_by_book(
     from collections import defaultdict
 
     by_book: dict = defaultdict(list)
-    orphans: list = []
+    # Annotations of removed books, by asset id ("" and None as one).
+    removed: dict = defaultdict(list)
     for anno in annotations:
         book = getattr(anno, "book", None)
         if book is None:
-            orphans.append(anno)
+            removed[getattr(anno, "asset_id", None) or None].append(anno)
         else:
             by_book[book.id].append((anno, book))
 
@@ -427,9 +637,9 @@ def _format_grouped_by_book(
         for anno in annos:
             lines.append(f"  {row_formatter(anno, ch_map)}")
 
-    if orphans:
-        lines.append("\nUnassigned (book no longer in library):")
-        for anno in orphans:
+    for asset_id, annos in removed.items():
+        lines.append(f"\n{_removed_book(asset_id, count=len(annos))}:")
+        for anno in annos:
             lines.append(f"  {row_formatter(anno, {})}")
 
     return "\n".join(lines).lstrip()
@@ -476,7 +686,10 @@ def _format_flat_with_timestamp(
         book = getattr(anno, "book", None)
         ch_map = ch_map_for(book.id) if book else {}
         row = _format_lean_row(anno, ch_map)
-        book_suffix = f" · {book.title}" if book else " · (book no longer in library)"
+        if book:
+            book_suffix = f" · {book.title}"
+        else:
+            book_suffix = f" · {_removed_book(getattr(anno, 'asset_id', None), short=True)}"
         lines.append(f"{_created_at(anno)} {row}{book_suffix}")
     return "\n".join(lines)
 
@@ -855,23 +1068,18 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
     ``get_chapter_content(book_id, chapter_id)`` on demand. This keeps
     the attached resource small so it doesn't dominate the context
     window.
+
+    When the book's chapters can't be read, it says why in
+    describe_book's words (:func:`_readable_text`).
     """
     try:
         resolution = _resolve_current_chapter(api, book)
-    except BookNotDownloadedError:
-        return (
-            "\nCurrent chapter: not available — this book hasn't been "
-            "downloaded to this Mac. Open it in Apple Books to sync."
-        )
-    except DRMProtectedError:
-        return (
-            "\nCurrent chapter: not readable — this is a DRM-protected "
-            "Apple Books Store purchase; only imported EPUBs expose their "
-            "chapter metadata."
-        )
     except AppleBooksError as e:
-        logger.warning("current reading chapter unavailable: %s", e)
-        return ""
+        readable = _readable_text(api, book)
+        if readable is None or readable == _READABLE:
+            logger.warning("current reading chapter unavailable: %s", e)
+            return ""
+        return f"\nCurrent chapter: not available\n  Readable text: {readable}"
 
     if resolution is None:
         return ""

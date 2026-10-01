@@ -14,6 +14,7 @@ from apple_books_mcp.server import (
     list_all_annotations,
     list_annotations,
     revisit_book,
+    search_annotations,
 )
 
 CHAPTERS = [
@@ -115,6 +116,8 @@ def test_notes_are_shown(library, tmp_path):
 
 def test_revisit_book_prompt_mentions_notes_and_paging():
     text = revisit_book("Some Book")
+    # search_books also finds the book by its author.
+    assert '`search_books` with "Some Book"' in text
     assert "`list_annotations`" in text and "limit=200" in text
     assert "↳ note:" in text
     assert "Next page: offset=N" in text
@@ -144,7 +147,7 @@ def test_library_stats_output(library, no_annotation_models):
         "  In progress: 1\n"
         "  Unstarted: 1\n"
         "Total annotations: 6\n"
-        "  (2 from books no longer in the library)\n"
+        "  (2 highlights from 2 removed books, no longer in the library)\n"
         "Most annotated books:\n"
         f"  [{reading['id']}] Reading: 3\n"
         f"  [{finished['id']}] Finished: 1"
@@ -165,3 +168,11 @@ def test_describe_book_counts_without_loading(library, no_annotation_models):
     # Live highlights only: the deleted one and the reading position
     # aren't counted.
     assert "  Annotations: 3" in text.splitlines()
+
+
+def test_search_annotations_shows_the_note(library):
+    """F13: a note that matches is shown, as search_notes shows it."""
+    book = library.add_book("Noted")
+    noted = library.add_annotation(book, "a highlight", kind="note", note="my thought")
+    text = search_annotations("thought").text
+    assert text == f"Noted (Test Author):\n  [{noted}] a highlight\n    ↳ note: my thought"

@@ -512,6 +512,8 @@ def _calls(tools):
         ("search_notes", {"note": "note"}),
         ("get_highlights_by_color", {"color": "yellow"}),
         ("search_books_by_title", {"title": "Synthetic"}),
+        ("search_books", {"query": "author"}),
+        ("get_chapter_content", {"book_id": 1}),
         ("get_books_by_genre", {"genre": "Fiction"}),
         ("describe_collection", {"collection_id": 9}),
         ("get_collection_books", {"collection_id": 9}),

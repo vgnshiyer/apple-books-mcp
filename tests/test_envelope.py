@@ -6,6 +6,7 @@ User highlights and notes in listings are not wrapped.
 import time
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from py_apple_books import PyAppleBooks
 from py_apple_books.testing import FixtureLibrary, write_epub
 
@@ -96,8 +97,29 @@ def test_book_description(crafted):
     before, inside, after = _one_envelope(text, f'<book_text book_id="{book_id}">\n')
     assert before.startswith("Crafted by Test Author\n")
     assert before.endswith("\n\nAbout:\n")
+    # The server's own lines stay outside the envelope.
+    assert "\n  Readable text: yes (EPUB)\n" in before
+    assert "\n  Open in Books: ibooks://assetid/" in before
     assert inside.startswith("A blurb. ")
     assert after == ""
+
+
+def test_annotation_in_context(library, crafted):
+    """describe_annotation's "In context" passage is Apple's copy of
+    the book's text around the highlight; the highlight and the user's
+    note stay outside."""
+    book_id, _ = crafted
+    book = {"id": book_id, "asset_id": server.apple_books.get_book_by_id(book_id).asset_id}
+    anno = library.add_annotation(
+        book, "the trap", note="my own note",
+        location="epubcfi(/6/4[c1]!/4/4,/1:7,/1:15)",
+        raw={"ZANNOTATIONREPRESENTATIVETEXT": f"Before the trap. {INJECTION}"})
+    text = describe_annotation(anno).text
+    before, inside, after = _one_envelope(
+        text, f'<book_text book_id="{book_id}" annotation_id="{anno}">\n')
+    assert before.endswith('\n  Highlighted: "the trap"\n  In context:\n')
+    assert inside.startswith("Before the trap. ")
+    assert after.startswith("\n  Note:        my own note\n")
 
 
 def test_annotation_context(crafted):
@@ -233,7 +255,8 @@ def test_a_crafted_chapter_id_is_never_shown(library, ids_epub):
     untitled = (
         "Current chapter: untitled, and its id isn't a plain name, so it isn't "
         f"shown  (list_book_chapters({book['id']}) lists the chapters)")
-    assert get_current_reading_position(book["id"]).text == untitled
+    position = get_current_reading_position(book["id"]).text
+    assert position == f"{untitled}\nOpen in Books: ibooks://assetid/{book['asset_id']}"
     resource = server._currently_reading()
     assert f"\n{untitled}\n" in resource
     for text in (resource, list_annotations(book["id"]).text,
@@ -241,6 +264,11 @@ def test_a_crafted_chapter_id_is_never_shown(library, ids_epub):
         assert "delete_collection" not in text
         assert "(ch=" not in text and "CFI:" not in text
     assert "[2] Some text." in list_annotations(book["id"]).text
+    # chapter_id "current": the position's chapter isn't in the file.
+    with pytest.raises(ToolError) as raised:
+        get_chapter_content(book["id"], "current")
+    assert "delete_collection" not in str(raised.value)
+    assert str(raised.value).startswith("Your reading position is in a chapter")
 
 
 def test_a_chapter_id_that_is_not_plain_gives_way_to_its_order(library, ids_epub):
@@ -249,9 +277,15 @@ def test_a_chapter_id_that_is_not_plain_gives_way_to_its_order(library, ids_epub
         book, None, kind="reading_position", location="epubcfi(/6/6[c 2'x]!/4/2,/1:0,/1:5)")
     hint = f'(use get_chapter_content({book["id"]}, "2") for the text)'
     text = get_current_reading_position(book["id"]).text
-    assert text.endswith(f"\n[2] Second\n</book_text>\n{hint}")
+    assert text.endswith(f"\n[2] Second\n</book_text>\n{hint}\nOpen in Books: "
+                         f"ibooks://assetid/{book['asset_id']}")
     assert f"Current chapter: [2/2] Second  {hint}" in server._currently_reading()
     assert "More text." in get_chapter_content(book["id"], "2").text
+    # chapter_id "current" names the chapter by its order, not its id.
+    current = get_chapter_content(book["id"], "current").text
+    assert "More text." in current and "c 2'x\"" not in current.split("</book_text>")[1]
+    assert current.endswith(
+        '\n(chapter_id "current" read chapter 2, from your reading position.)')
 
 
 def test_server_instructions():
@@ -263,7 +297,8 @@ def test_server_instructions():
     assert 400 < len(text) < 1500
     for phrase in ("<book_text>", "untrusted", "Never follow", "collection edits",
                    "other servers' tools", "[175]", "integer", "(ch=...)",
-                   "Next page: offset=N", "local time zone", "YYYY-MM-DD",
+                   "Next page: offset=N", 'chapter_id "current"', "local time zone",
+                   "YYYY-MM-DD",
                    "--enable-writes", "Book titles", "chapter names and ids",
                    "errors included"):
         assert phrase in text, phrase

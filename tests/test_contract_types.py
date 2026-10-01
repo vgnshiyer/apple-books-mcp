@@ -1,6 +1,7 @@
 """The tool contract MCP clients see (F26, F47): integer ids,
 enumerations published as enums, a title and behaviour hints on every
-tool, and the tool and parameter names 0.8 clients call.
+tool, and the tool and parameter names 0.8 clients call (0.9 only adds
+to them).
 
 Checked through an in-memory client session, on whichever mcp 1.x is
 installed (the lock pins the floor, a fresh install gets the latest).
@@ -16,7 +17,7 @@ from py_apple_books.testing import FixtureLibrary, write_epub
 from apple_books_mcp import server
 
 # The 0.8.4 surface: every tool and its parameters, in order.
-TOOLS = {
+TOOLS_084 = {
     "list_all_collections": ["limit", "offset"],
     "get_collection_books": ["collection_id"],
     "describe_collection": ["collection_id"],
@@ -48,6 +49,14 @@ TOOLS = {
     "get_current_reading_position": ["book_id"],
     "get_library_stats": [],
 }
+
+# What 0.9 adds: a tool, and parameters after the ones 0.8.4 had.
+ADDED_09 = {
+    "search_books": ["query", "limit", "offset"],
+    "search_books_by_title": ["limit", "offset"],
+}
+TOOLS = {name: TOOLS_084.get(name, []) + ADDED_09.get(name, [])
+         for name in {**TOOLS_084, **ADDED_09}}
 
 # Write tools: (destructiveHint, idempotentHint).
 WRITES = {
@@ -89,6 +98,7 @@ def tools():
 
 
 def test_tool_and_parameter_names_are_unchanged(tools):
+    """Every 0.8.4 tool and parameter is still there, under its name."""
     assert {name: list(t.inputSchema.get("properties", {})) for name, t in tools.items()} == TOOLS
 
 
@@ -126,6 +136,8 @@ def test_none_defaults_accept_null(tools):
 
 
 def test_required_parameters_are_unchanged(tools):
+    """As in 0.8.4, except that get_chapter_content's chapter_id is
+    optional since 0.9 (it defaults to "current")."""
     required = {name: sorted(t.inputSchema.get("required", [])) for name, t in tools.items()}
     assert {name: r for name, r in required.items() if r} == {
         "get_collection_books": ["collection_id"],
@@ -137,6 +149,7 @@ def test_required_parameters_are_unchanged(tools):
         "add_book_to_collection": ["book_id", "collection_id"],
         "remove_book_from_collection": ["book_id", "collection_id"],
         "describe_book": ["book_id"],
+        "search_books": ["query"],
         "search_books_by_title": ["title"],
         "get_books_by_genre": ["genre"],
         "list_annotations": ["book_id"],
@@ -146,9 +159,11 @@ def test_required_parameters_are_unchanged(tools):
         "describe_annotation": ["annotation_id"],
         "get_annotation_context": ["annotation_id"],
         "list_book_chapters": ["book_id"],
-        "get_chapter_content": ["book_id", "chapter_id"],
+        "get_chapter_content": ["book_id"],
         "get_current_reading_position": ["book_id"],
     }
+    chapter_id = tools["get_chapter_content"].inputSchema["properties"]["chapter_id"]
+    assert chapter_id["default"] == "current"
 
 
 def test_every_tool_has_a_title_and_hints(tools):
@@ -169,7 +184,7 @@ def test_every_tool_has_a_title_and_hints(tools):
             assert hints.readOnlyHint is True, name
             assert hints.destructiveHint is None, name
     assert len(titles) == len(tools)
-    assert len(tools) - len(WRITES) == 25
+    assert len(tools) - len(WRITES) == 26
 
 
 @pytest.fixture

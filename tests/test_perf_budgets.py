@@ -45,10 +45,10 @@ MAX_CHARS = 87_500
 
 # Characters per row of a book listing ("[id] title by author"),
 # measured on a real library in September 2026: 63-68. populate()'s
-# rows are about 37, which let the unpaged search_books_by_title pass
-# at 76k characters on 2,000 books when a real library that size gets
-# about 130k. _build() lengthens the synthetic titles and authors, and
-# test_book_rows_are_realistic keeps them in this range. (Paged
+# rows are about 37, which let the then unpaged search_books_by_title
+# pass at 76k characters on 2,000 books when a real library that size
+# gets about 130k. _build() lengthens the synthetic titles and authors,
+# and test_book_rows_are_realistic keeps them in this range. (Paged
 # listings stop at the server's 40k-character output budget whatever
 # the row length.)
 BOOK_ROW_CHARS = (60, 75)
@@ -75,8 +75,11 @@ CASES = [
     ("list_all_books", lambda ids: {}, BOOK_CALL),
     ("list_all_books", lambda ids: {"limit": 500, "offset": 1_000}, BOOK_CALL),
     ("describe_book", lambda ids: {"book_id": str(ids["heavy_book"])}, (1.0, 10)),
-    # Matches every book: the one book listing without paging (see UNPAGED).
+    # Match every book, like the other book listings.
     ("search_books_by_title", lambda ids: {"title": "Book"}, BOOK_CALL),
+    # Loads every book and matches title and author in Python (py-apple-books
+    # 1.10 has no author search).
+    ("search_books", lambda ids: {"query": "Book"}, BOOK_CALL),
     ("get_books_by_genre", lambda ids: {"genre": "Fiction"}, BOOK_CALL),
     ("get_books_in_progress", lambda ids: {}, BOOK_CALL),
     ("get_finished_books", lambda ids: {}, BOOK_CALL),
@@ -95,6 +98,8 @@ CASES = [
     ("get_annotation_context", lambda ids: {"annotation_id": ids["highlight"]}, (3.0, 10)),
     ("list_book_chapters", lambda ids: {"book_id": ids["long_book"]}, EPUB_CALL),
     ("get_chapter_content", lambda ids: {"book_id": ids["long_book"], "chapter_id": "c15"}, EPUB_CALL),
+    # chapter_id "current": the reading position's chapter.
+    ("get_chapter_content", lambda ids: {"book_id": ids["long_book"]}, EPUB_CALL),
     ("get_current_reading_position", lambda ids: {"book_id": ids["epub_book"]}, (3.0, 10)),
     ("get_library_stats", lambda ids: {}, (3.0, 10)),
 ]
@@ -103,10 +108,8 @@ CASES = [
 # Tools known to break the output budget on a library this size, with
 # why. Their cases still check time and SQL statements, then xfail on
 # size; once a tool fits, its case fails until it is taken off this list.
-UNPAGED = {
-    "search_books_by_title": "no limit/offset yet: a match-all search on 2,000 realistic "
-                             "books is about 130k characters",
-}
+# (search_books_by_title was here until 0.9 paged it.)
+UNPAGED: dict = {}
 
 
 def _build(root: Path) -> dict:
@@ -151,6 +154,8 @@ def _build(root: Path) -> dict:
     epub = write_epub(root / "work" / "books" / "Long Book.epub", "Long Synthetic Book", chapters,
                       identifier="urn:uuid:00000000-0000-4000-8000-0000000000aa")
     long_book = lib.add_book("Long Synthetic Book", path=epub, progress=0.3, genre="History")
+    lib.add_annotation(long_book, None, kind="reading_position",
+                       location="epubcfi(/6/32[c15]!/4/2/1:0)")
     return {
         "lib": lib,
         "heavy_book": heavy["id"],
@@ -214,12 +219,19 @@ def _call(name: str, arguments: dict) -> str:
     return "".join(getattr(block, "text", "") for block in result)
 
 
+class _IdNames(dict):
+    """Ids for naming cases: each id is its key."""
+
+    def __missing__(self, key):
+        return key
+
+
 def _case_id(case) -> str:
     """The tool's name, plus its arguments when it is measured twice."""
     name, arguments, _ = case
     if sum(c[0] == name for c in CASES) == 1:
         return name
-    return "-".join([name] + [f"{k}={v}" for k, v in arguments({}).items()])
+    return "-".join([name] + [f"{k}={v}" for k, v in arguments(_IdNames()).items()])
 
 
 @pytest.mark.parametrize("name, arguments, budget",
@@ -286,6 +298,7 @@ def test_stdio_peak_memory(library):
         ("get_annotations_by_date_range", {"after": "2023-03-01", "limit": 500}),
         ("list_all_books", {"limit": 500}),
         ("search_books_by_title", {"title": "Book"}),
+        ("search_books", {"query": "Book"}),
         ("get_library_stats", {}),
     ]
     messages = [

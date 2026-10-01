@@ -25,6 +25,7 @@ text, which the other test modules own.
 """
 import ast
 import asyncio
+import collections
 import dataclasses
 import functools
 import importlib
@@ -42,7 +43,12 @@ from mcp.shared.memory import create_connected_server_and_client_session
 from pydantic import AnyUrl
 from py_apple_books import LibraryStats, PyAppleBooks
 from py_apple_books.content import BookContent, Chapter
-from py_apple_books.exceptions import BookNotDownloadedError, NotFoundError
+from py_apple_books.exceptions import (
+    BookNotDownloadedError,
+    ChapterNotFoundError,
+    DRMProtectedError,
+    NotFoundError,
+)
 from py_apple_books.models import Annotation, Book, Collection
 from py_apple_books.models.location import Location
 from py_apple_books.models.manager import ModelIterable
@@ -74,6 +80,7 @@ def _read_calls(ids):
         "search_collections_by_title": {"title": "Shelf"},
         "list_all_books": {"limit": 50},
         "describe_book": {"book_id": ids["book"]},
+        "search_books": {"query": "author"},
         "search_books_by_title": {"title": "Synthetic"},
         "get_books_by_genre": {"genre": "Fiction"},
         "get_books_in_progress": {},
@@ -309,6 +316,8 @@ class _Watch:
         })
         fake.__iter__.side_effect = lambda: iter(items)
         fake.__getitem__.side_effect = items.__getitem__
+        fake.count_by.side_effect = lambda field: dict(
+            collections.Counter(getattr(item, field) for item in items))
         fake.__len__.return_value = len(items)
         fake.__bool__.return_value = bool(items)
         return fake
@@ -683,6 +692,8 @@ def demo(demo_store, library_errors, monkeypatch):
         "annotation": annotations["highlight"],
         "chapter": "chap1",
         "book_without_file": books["finished"]["id"],
+        "drm_book": books["drm"]["id"],
+        "series_item": books["series_stack"]["id"],
         "orphan": annotations["orphan"],
         "note": annotations["note"],
     }
@@ -705,6 +716,15 @@ E2E_VARIANTS = {
         "list_all_books", lambda ids: {"limit": 2, "offset": 2}),
     "get_chapter_content-by_order": (
         "get_chapter_content", lambda ids: {"book_id": ids["book"], "chapter_id": "2"}),
+    "get_chapter_content-current": (
+        "get_chapter_content", lambda ids: {"book_id": ids["book"]}),
+    "describe_book-book_without_file": (
+        "describe_book", lambda ids: {"book_id": ids["book_without_file"]}),
+    "describe_book-drm": ("describe_book", lambda ids: {"book_id": ids["drm_book"]}),
+    "describe_book-series_item": ("describe_book", lambda ids: {"book_id": ids["series_item"]}),
+    "search_books-accents": ("search_books", lambda ids: {"query": "DON’T"}),
+    "search_books_by_title-second_page": (
+        "search_books_by_title", lambda ids: {"title": "o", "limit": 1, "offset": 1}),
 }
 
 
@@ -714,6 +734,11 @@ E2E_VARIANTS = {
 # no local file.
 _NOT_DOWNLOADED = (("PyAppleBooks.get_book_content", BookNotDownloadedError),)
 E2E_EXPECTED_ERRORS = {
+    # Readable text: the library opens the book, and says it's DRM.
+    "describe_book-drm": (("PyAppleBooks.get_book_content", DRMProtectedError),),
+    # A chapter whose id is literally "current" would win, so that id is
+    # looked up first.
+    "get_chapter_content-current": (("BookContent.get_chapter", ChapterNotFoundError),),
     "list_all_annotations": _NOT_DOWNLOADED,
     "recent_annotations": _NOT_DOWNLOADED,
     "get_annotations_by_date_range": _NOT_DOWNLOADED,

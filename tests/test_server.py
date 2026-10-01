@@ -256,7 +256,7 @@ def test_list_annotations_unknown_book(mock_apple_books):
     with pytest.raises(ToolError) as raised:
         list_annotations("99999")
     assert str(raised.value) == (
-        "No book with id 99999. Use search_books_by_title or list_all_books "
+        "No book with id 99999. Use search_books or list_all_books "
         "to find book ids."
     )
     mock_apple_books.get_book_by_id.assert_called_once_with(99999)
@@ -296,14 +296,15 @@ def test_recent_annotations(mock_apple_books):
 def test_recent_annotations_handles_missing_book(mock_apple_books):
     orphaned_annotation = MockAnnotation()
     orphaned_annotation.book = None
+    orphaned_annotation.asset_id = "3F2A1B2C9D8E7F60A1B2C3D4E5F60718"
     mock_apple_books.list_annotations.return_value = MockResults([orphaned_annotation])
 
     result = recent_annotations()
 
     # Orphaned annotations (asset_id no longer maps to a library book) get
-    # an explicit "no longer in library" suffix instead of silently
-    # disappearing into an "Unknown Book" bucket.
-    assert "no longer in library" in result.text
+    # a per-book "removed book" suffix instead of silently disappearing
+    # into an "Unknown Book" bucket.
+    assert result.text.endswith(" · removed book 3F2A1B2C…")
     mock_apple_books.list_annotations.assert_called_once_with(order_by="-creation_date")
 
 
@@ -649,10 +650,22 @@ def test_library_stats_separates_orphan_annotations(mock_apple_books):
     result = get_library_stats()
     # 'Unknown Book' should NOT appear in the top list anymore.
     assert "Unknown Book:" not in result.text
-    # But the orphan count is surfaced separately.
-    assert "from books no longer in the library" in result.text
+    # But the orphan count is surfaced separately (without the number
+    # of removed books when it can't be counted).
+    assert "  (1 from books no longer in the library)" in result.text
     # The valid annotation still shows up under its real book.
     assert "Book 1" in result.text
+
+    # The removed books are told apart by asset id: grouped in SQL.
+    books = MockResults([MockBook()])
+    books.count_by = lambda field: {"ASSET1": 1}
+    annotations = MockResults()
+    annotations.count_by = lambda field: {"ASSET1": 1, "GONE1": 3, "GONE2": 1}
+    mock_apple_books.list_books.return_value = books
+    mock_apple_books.list_annotations.return_value = annotations
+    text = get_library_stats().text
+    assert "  (1 highlight from 2 removed books, no longer in the library)" in text
+    mock_apple_books.list_books.assert_called_with(include_store_series=True)
 
 
 # ---------------------------------------------------------------------------
