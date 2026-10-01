@@ -163,7 +163,8 @@ def test_bundle_contents(tmp_path):
     staged = build_mcpb.stage(tmp_path / "bundle", _rendered())
     files = {p.relative_to(staged).as_posix() for p in staged.rglob("*") if p.is_file()}
     package = {p.relative_to(ROOT).as_posix()
-               for p in (ROOT / "apple_books_mcp").rglob("*.py")}
+               for p in (ROOT / "apple_books_mcp").rglob("*")
+               if p.is_file() and "__pycache__" not in p.parts and p.suffix != ".pyc"}
     assert files == {"manifest.json", "pyproject.toml", "uv.lock", "README.md", "LICENSE"} | package
     staged_manifest = json.loads((staged / "manifest.json").read_text(encoding="utf-8"))
     assert staged_manifest == _rendered()
