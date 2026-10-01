@@ -43,6 +43,16 @@ PER_BOOK = 25  # 50,000 annotations
 # at ~3.5 characters a token that is about this many characters.
 MAX_CHARS = 87_500
 
+# Characters per row of a book listing ("[id] title by author"),
+# measured on a real library in September 2026: 63-68. populate()'s
+# rows are about 37, which let the unpaged search_books_by_title pass
+# at 76k characters on 2,000 books when a real library that size gets
+# about 130k. _build() lengthens the synthetic titles and authors, and
+# test_book_rows_are_realistic keeps them in this range. (Paged
+# listings stop at the server's 40k-character output budget whatever
+# the row length.)
+BOOK_ROW_CHARS = (60, 75)
+
 # Peak resident memory of the server process over the stdio calls below.
 MAX_RSS_MB = 300
 
@@ -65,7 +75,7 @@ CASES = [
     ("list_all_books", lambda ids: {}, BOOK_CALL),
     ("list_all_books", lambda ids: {"limit": 500, "offset": 1_000}, BOOK_CALL),
     ("describe_book", lambda ids: {"book_id": str(ids["heavy_book"])}, (1.0, 10)),
-    # Matches every book: the one book listing without paging.
+    # Matches every book: the one book listing without paging (see UNPAGED).
     ("search_books_by_title", lambda ids: {"title": "Book"}, BOOK_CALL),
     ("get_books_by_genre", lambda ids: {"genre": "Fiction"}, BOOK_CALL),
     ("get_books_in_progress", lambda ids: {}, BOOK_CALL),
@@ -90,6 +100,15 @@ CASES = [
 ]
 
 
+# Tools known to break the output budget on a library this size, with
+# why. Their cases are strict xfails, so fixing the tool fails the test
+# until it is taken off this list.
+UNPAGED = {
+    "search_books_by_title": "no limit/offset yet: a match-all search on 2,000 realistic "
+                             "books is about 130k characters",
+}
+
+
 def _build(root: Path) -> dict:
     """The demo library (EPUB, notes, collections, edge cases) plus
     2,000 books with 25 highlights each; every 10th highlight has a
@@ -101,6 +120,15 @@ def _build(root: Path) -> dict:
     first = max(demo["annotations"].values()) + 1
     made = lib.populate(books=BOOKS, annotations_per_book=PER_BOOK)
     heavy = made["books"][0]
+    # populate()'s "Populated Book 12 by Author 5" is half as long as a
+    # real book row; see REAL_CHARS_PER_ROW.
+    lib.execute(
+        "library",
+        "UPDATE ZBKLIBRARYASSET SET ZTITLE = ZTITLE || ': Typical Subtitle', "
+        "ZSORTTITLE = ZTITLE || ': Typical Subtitle', ZAUTHOR = 'Synthetic ' || ZAUTHOR, "
+        "ZSORTAUTHOR = 'Synthetic ' || ZAUTHOR WHERE Z_PK >= ?",
+        (heavy["id"],),
+    )
     lib.execute(
         "annotations",
         "UPDATE ZAEANNOTATION SET ZANNOTATIONNOTE = 'synthetic note ' || Z_PK "
@@ -194,7 +222,14 @@ def _case_id(case) -> str:
     return "-".join([name] + [f"{k}={v}" for k, v in arguments({}).items()])
 
 
-@pytest.mark.parametrize("name, arguments, budget", CASES, ids=[_case_id(c) for c in CASES])
+def _param(case):
+    marks = ()
+    if case[0] in UNPAGED:
+        marks = pytest.mark.xfail(strict=True, reason=UNPAGED[case[0]])
+    return pytest.param(*case, id=_case_id(case), marks=marks)
+
+
+@pytest.mark.parametrize("name, arguments, budget", [_param(c) for c in CASES])
 def test_budget(library, statements, name, arguments, budget):
     seconds, max_statements = budget
     before = statements.count
@@ -207,6 +242,16 @@ def test_budget(library, statements, name, arguments, budget):
     assert len(text) <= MAX_CHARS, f"{name}: {len(text):,} chars (budget {MAX_CHARS:,})"
     assert elapsed <= seconds, f"{name}: {elapsed:.2f} s (budget {seconds} s)"
     assert used <= max_statements, f"{name}: {used} SQL statements (budget {max_statements})"
+
+
+def test_book_rows_are_realistic(library, statements):
+    """The output budgets only hold for real libraries if synthetic rows
+    are as long as real ones (BOOK_ROW_CHARS)."""
+    text = _call("list_all_books", {"limit": 500})
+    rows = re.findall(r"^\[\d+\] ", text, re.M)
+    per_row = len(text) / len(rows)
+    low, high = BOOK_ROW_CHARS
+    assert low <= per_row <= high, f"{per_row:.1f} characters per book row (real: {BOOK_ROW_CHARS})"
 
 
 def _stdio_server(home: Path):
@@ -276,7 +321,9 @@ def test_stdio_peak_memory(library):
         result = responses[n].get("result", {})
         assert not result.get("isError"), (name, result)
         text = "".join(block.get("text", "") for block in result.get("content", []))
-        assert 0 < len(text) <= MAX_CHARS, (name, len(text))
+        assert text, name
+        if name not in UNPAGED:  # test_budget covers those
+            assert len(text) <= MAX_CHARS, (name, len(text))
 
     match = re.search(r"^MAXRSS (\d+)$", stderr, re.M)
     assert match, stderr[-2000:]
