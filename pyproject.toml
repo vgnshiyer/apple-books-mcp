@@ -38,10 +38,16 @@ build-backend = "hatchling.build"
 # Just the package and its tests, not the repo's CI, Docker and docs files.
 include = ["/apple_books_mcp", "/tests", "/README.md", "/LICENSE"]
 
-[tool.uv]
-dev-dependencies = [
+[dependency-groups]
+dev = [
     "pytest>=8.3.5",
 ]
+
+[tool.uv]
+# Pins the build backend in uv.lock, so the Claude Desktop extension's
+# `uv sync` builds with the audited hatchling rather than whatever PyPI
+# has that day.
+build-constraint-dependencies = ["hatchling==1.32.4"]
 
 [project.scripts]
 apple-books-mcp = "apple_books_mcp:main"

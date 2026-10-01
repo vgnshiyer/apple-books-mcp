@@ -219,9 +219,8 @@ def test_bundle_pyproject_no_dev_group():
 # [build-system] backend, which uv resolves fresh from PyPI on every
 # install unless uv.lock records build constraints for it: outside the
 # lock and the audit, and a future hatchling could break bundles already
-# published. Strict, so the marker has to go once pyproject.toml's
-# [tool.uv] build-constraint-dependencies pins it and uv.lock is redone.
-@pytest.mark.xfail(strict=True, reason="needs build-constraint-dependencies in pyproject.toml")
+# published. pyproject.toml's [tool.uv] build-constraint-dependencies
+# pins it.
 def test_bundle_pins_build_backend(tmp_path):
     staged = build_mcpb.stage(tmp_path / "bundle", _rendered())
     pyproject = (staged / "pyproject.toml").read_text(encoding="utf-8")
@@ -340,10 +339,6 @@ def test_extension_writes_off(tmp_path):
     assert _WRITES_DISABLED.search(_writes_text(tmp_path, False))
 
 
-# Claude Desktop sends "true", but the server only accepts
-# APPLE_BOOKS_MCP_ENABLE_WRITES=1 so far. Strict, so this fails (and the
-# marker has to go) once the server accepts "true".
-@pytest.mark.xfail(strict=True, reason="needs the server's _writes_enabled() to accept true/yes")
 def test_extension_writes_on(tmp_path):
     """F20: ticked ("true") enables the write tools."""
     assert not _WRITES_DISABLED.search(_writes_text(tmp_path, True))
