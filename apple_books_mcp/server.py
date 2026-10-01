@@ -186,10 +186,25 @@ def _without_home(text: str) -> str:
     return re.sub(re.escape(home) + r"(?![\w.-])", "~", text)
 
 
-# A quoted name of more than 80 characters in an error, like an EPUB
-# entry or a title, which the book's author controls. The quotes stand
-# alone, so an apostrophe inside a word is not one.
-_LONG_QUOTE = re.compile(r"""(?<!\w)(['"])((?:(?!\1)[^\\\n]|\\.){81,})\1(?!\w)""")
+# The library's own messages are under 300 characters, but one can
+# quote a title or an EPUB entry name, which the book's author controls
+# and can make any length. A longer message keeps its start and its
+# end, where the library says what to do.
+_MAX_MESSAGE = 400
+
+
+def _clip(text: str) -> str:
+    """``text``, or its first 240 and last 160 characters when it is
+    longer than :data:`_MAX_MESSAGE`."""
+    if len(text) <= _MAX_MESSAGE:
+        return text
+    return f"{text[:240]}…{text[-160:]}"
+
+
+# A quoted name of more than 80 characters, cut to its first 60 and
+# last 20. The quotes stand alone, so an apostrophe inside a word is not
+# one. Each scan stops at the next quote of its kind, so this is linear.
+_LONG_QUOTE = re.compile(r"""(?<!\w)(['"])((?:(?!\1)[^\n]){81,})\1(?!\w)""")
 
 
 def _shorten_quotes(text: str) -> str:
@@ -201,7 +216,11 @@ def _shorten_quotes(text: str) -> str:
 def _error_text(e: Exception, other: str = "Apple Books error: {e}") -> str:
     """The client-facing message for ``e``. ``other`` is used for an
     AppleBooksError the table doesn't name, so a tool can say what it
-    was doing."""
+    was doing.
+
+    A ToolError is this server's own message, and any library text in
+    it has been through here already, so it is only kept path-free.
+    """
     for kind, template in _ERRORS:
         if isinstance(e, kind):
             break
@@ -210,7 +229,10 @@ def _error_text(e: Exception, other: str = "Apple Books error: {e}") -> str:
             template = other
         else:
             template = f"Unexpected error ({type(e).__name__}): {{e}}"
-    return _shorten_quotes(_without_home(template.format(e=e)))
+    message = _without_home(str(e))
+    if not isinstance(e, ToolError):
+        message = _shorten_quotes(_clip(message))
+    return template.format(e=message)
 
 
 # -- Registration --
