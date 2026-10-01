@@ -1,0 +1,47 @@
+{
+  "manifest_version": "0.4",
+  "name": "apple-books-mcp",
+  "display_name": "Apple Books",
+  "description": "Read your Apple Books library, highlights, notes and reading progress",
+  "long_description": "Lets Claude read the Apple Books library on this Mac: books, collections, highlights, notes, reading progress and chapter text.\n\nThe first time it reads the library, macOS asks whether Claude may access data from other apps. Click **Allow**.\n\nIt only reads the library unless you turn on **Allow editing collections**. Edits (creating, renaming and deleting collections, adding and removing books) refuse to run while Books is open, and every change takes a backup first.",
+  "author": {
+    "name": "Vignesh Iyer",
+    "email": "vgnshiyer@gmail.com"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/vgnshiyer/apple-books-mcp"
+  },
+  "homepage": "https://vgnshiyer.me/AppleBooksMcp",
+  "documentation": "https://github.com/vgnshiyer/apple-books-mcp#readme",
+  "support": "https://github.com/vgnshiyer/apple-books-mcp/issues",
+  "license": "Apache-2.0",
+  "keywords": ["apple-books", "ibooks", "books", "highlights", "annotations", "reading", "macos"],
+  "server": {
+    "type": "uv",
+    "entry_point": "apple_books_mcp/__main__.py",
+    "mcp_config": {
+      "command": "uv",
+      "args": ["run", "--directory", "${__dirname}", "--frozen", "--no-dev", "python", "-m", "apple_books_mcp"],
+      "env": {
+        "APPLE_BOOKS_MCP_ENABLE_WRITES": "${user_config.enable_writes}"
+      }
+    }
+  },
+  "prompts_generated": true,
+  "user_config": {
+    "enable_writes": {
+      "type": "boolean",
+      "title": "Allow editing collections",
+      "description": "Lets Claude create, rename and delete collections and add or remove books. Edits refuse to run while Books is open, and every change takes a backup first.",
+      "default": false,
+      "required": false
+    }
+  },
+  "compatibility": {
+    "platforms": ["darwin"],
+    "runtimes": {
+      "python": ">=3.10"
+    }
+  }
+}
