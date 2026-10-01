@@ -411,6 +411,34 @@ def test_dockerfile_pinned_and_unprivileged():
     assert users and users[-1] not in {"root", "0"}
 
 
+def _step_inputs(text, action):
+    """The `with:` lines of every step that uses ``action``."""
+    lines = text.splitlines()
+    steps = []
+    for n, line in enumerate(lines):
+        if re.match(rf"\s*(?:-\s*)?uses:\s*{re.escape(action)}@", line):
+            indent = len(line) - len(line.lstrip(" -"))
+            body = []
+            for following in lines[n + 1:]:
+                if following.strip() and len(following) - len(following.lstrip()) < indent:
+                    break
+                body.append(following)
+            steps.append("\n".join(body))
+    return steps
+
+
+def test_uv_pinned():
+    """F39: CI, the release build and the audit all use one uv version,
+    not whatever uv is newest on the day."""
+    versions = set()
+    for workflow in (ROOT / ".github" / "workflows").glob("*.yml"):
+        for inputs in _step_inputs(workflow.read_text(encoding="utf-8"), "astral-sh/setup-uv"):
+            match = re.search(r'^\s+version: "(\d+\.\d+\.\d+)"$', inputs, re.M)
+            assert match, (workflow.name, inputs)
+            versions.add(match.group(1))
+    assert len(versions) == 1, versions
+
+
 @pytest.mark.parametrize("workflow", sorted((ROOT / ".github" / "workflows").glob("*.yml")),
                          ids=lambda p: p.name)
 def test_actions_pinned_by_sha(workflow):
