@@ -101,8 +101,8 @@ CASES = [
 
 
 # Tools known to break the output budget on a library this size, with
-# why. Their cases are strict xfails, so fixing the tool fails the test
-# until it is taken off this list.
+# why. Their cases still check time and SQL statements, then xfail on
+# size; once a tool fits, its case fails until it is taken off this list.
 UNPAGED = {
     "search_books_by_title": "no limit/offset yet: a match-all search on 2,000 realistic "
                              "books is about 130k characters",
@@ -222,14 +222,8 @@ def _case_id(case) -> str:
     return "-".join([name] + [f"{k}={v}" for k, v in arguments({}).items()])
 
 
-def _param(case):
-    marks = ()
-    if case[0] in UNPAGED:
-        marks = pytest.mark.xfail(strict=True, reason=UNPAGED[case[0]])
-    return pytest.param(*case, id=_case_id(case), marks=marks)
-
-
-@pytest.mark.parametrize("name, arguments, budget", [_param(c) for c in CASES])
+@pytest.mark.parametrize("name, arguments, budget",
+                         [pytest.param(*c, id=_case_id(c)) for c in CASES])
 def test_budget(library, statements, name, arguments, budget):
     seconds, max_statements = budget
     before = statements.count
@@ -239,9 +233,13 @@ def test_budget(library, statements, name, arguments, budget):
     used = statements.count - before
 
     assert text.strip(), f"{name} returned nothing"
-    assert len(text) <= MAX_CHARS, f"{name}: {len(text):,} chars (budget {MAX_CHARS:,})"
     assert elapsed <= seconds, f"{name}: {elapsed:.2f} s (budget {seconds} s)"
     assert used <= max_statements, f"{name}: {used} SQL statements (budget {max_statements})"
+    fits = len(text) <= MAX_CHARS
+    if name in UNPAGED:
+        assert not fits, f"{name} fits the output budget now: take it off UNPAGED"
+        pytest.xfail(f"{UNPAGED[name]} ({len(text):,} chars)")
+    assert fits, f"{name}: {len(text):,} chars (budget {MAX_CHARS:,})"
 
 
 def test_book_rows_are_realistic(library, statements):
