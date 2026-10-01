@@ -168,6 +168,51 @@ def test_bundle_contents(tmp_path):
     assert files == {"manifest.json", "pyproject.toml", "uv.lock", "README.md", "LICENSE"} | package
     staged_manifest = json.loads((staged / "manifest.json").read_text(encoding="utf-8"))
     assert staged_manifest == _rendered()
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    assert (staged / "pyproject.toml").read_text(encoding="utf-8") == \
+        build_mcpb.bundle_pyproject(pyproject)
+    for name in ("uv.lock", "README.md", "LICENSE"):
+        assert (staged / name).read_bytes() == (ROOT / name).read_bytes(), name
+
+
+def test_bundle_pyproject_no_dev_group():
+    """Claude Desktop installs the bundle with a plain `uv sync`, which
+    installs the default groups too: the bundled pyproject.toml has none,
+    and otherwise says what the repo's does (so uv.lock still matches)."""
+    pyproject = (ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    bundled = build_mcpb.bundle_pyproject(pyproject)
+    assert re.search(r"^\[tool\.uv\]\ndefault-groups = \[\]$", bundled, re.M)
+    assert bundled.replace("\ndefault-groups = []", "", 1) == pyproject
+    if sys.version_info >= (3, 11):
+        import tomllib
+
+        expected = tomllib.loads(pyproject)
+        expected["tool"]["uv"]["default-groups"] = []
+        assert tomllib.loads(bundled) == expected
+    # Without a [tool.uv] table, one is added.
+    assert build_mcpb.bundle_pyproject('[project]\nname = "x"\n') == \
+        '[project]\nname = "x"\n\n[tool.uv]\ndefault-groups = []\n'
+    with pytest.raises(SystemExit):
+        build_mcpb.bundle_pyproject(bundled)
+
+
+# Desktop's `uv sync` builds the project (an editable install) with the
+# [build-system] backend, which uv resolves fresh from PyPI on every
+# install unless uv.lock records build constraints for it: outside the
+# lock and the audit, and a future hatchling could break bundles already
+# published. Strict, so the marker has to go once pyproject.toml's
+# [tool.uv] build-constraint-dependencies pins it and uv.lock is redone.
+@pytest.mark.xfail(strict=True, reason="needs build-constraint-dependencies in pyproject.toml")
+def test_bundle_pins_build_backend(tmp_path):
+    staged = build_mcpb.stage(tmp_path / "bundle", _rendered())
+    pyproject = (staged / "pyproject.toml").read_text(encoding="utf-8")
+    requirement = re.search(r'^requires\s*=\s*\[\s*"([^"]+)"', pyproject, re.M).group(1)
+    backend = re.match(r"[\w.-]+", requirement).group(0)
+    lock = (staged / "uv.lock").read_text(encoding="utf-8")
+    manifest = re.search(r"^\[manifest\]$(.*?)(?=^\[)", lock, re.M | re.S)
+    pinned = dict(re.findall(r'\{ name = "([^"]+)", specifier = "==([^"]+)" \}',
+                             manifest.group(1) if manifest else ""))
+    assert backend in pinned or "==" in requirement, (requirement, pinned)
 
 
 def _zip(staged, bundle, extra=None):
