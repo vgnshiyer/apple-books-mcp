@@ -121,7 +121,7 @@ def _build(root: Path) -> dict:
     made = lib.populate(books=BOOKS, annotations_per_book=PER_BOOK)
     heavy = made["books"][0]
     # populate()'s "Populated Book 12 by Author 5" is half as long as a
-    # real book row; see REAL_CHARS_PER_ROW.
+    # real book row; see BOOK_ROW_CHARS.
     lib.execute(
         "library",
         "UPDATE ZBKLIBRARYASSET SET ZTITLE = ZTITLE || ': Typical Subtitle', "
@@ -251,7 +251,7 @@ def test_book_rows_are_realistic(library, statements):
     rows = re.findall(r"^\[\d+\] ", text, re.M)
     per_row = len(text) / len(rows)
     low, high = BOOK_ROW_CHARS
-    assert low <= per_row <= high, f"{per_row:.1f} characters per book row (real: {BOOK_ROW_CHARS})"
+    assert low <= per_row <= high, f"{per_row:.1f} characters per book row, not {low}-{high}"
 
 
 def _stdio_server(home: Path):
