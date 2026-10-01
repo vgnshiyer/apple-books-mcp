@@ -5,6 +5,7 @@
 import re
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from py_apple_books import PyAppleBooks
 from py_apple_books.testing import FixtureLibrary, write_epub
 
@@ -203,8 +204,9 @@ def test_order_by_newest_or_oldest(big, tool, args):
     assert newest == sorted(newest, reverse=True)
     assert oldest == sorted(oldest)
     assert min(newest) > max(oldest)
-    text = _text(tool(*args, order_by="sideways"))
-    assert text == "order_by must be 'newest' or 'oldest', not 'sideways'."
+    with pytest.raises(ToolError) as raised:
+        tool(*args, order_by="sideways")
+    assert str(raised.value) == "order_by must be 'newest' or 'oldest', not 'sideways'."
 
 
 def test_color_page_counts(big):
@@ -242,8 +244,10 @@ def test_chapter_content_is_capped(long_chapter):
 def test_annotation_context_is_clamped(long_chapter):
     _, anno = long_chapter
     text = _text(get_annotation_context(anno, chars_before=-5, chars_after=10**6))
-    # No context before the highlight (the library marks the cut with "…").
-    assert text.lstrip("…").startswith("«the marked sentence»")
+    # The passage is inside the <book_text> envelope; no context before
+    # the highlight (the library marks the cut with "…").
+    passage = text.split("\n", 1)[1]
+    assert passage.lstrip("…").startswith("«the marked sentence»")
     assert "(chars_before=-5 is out of range; used 0.)" in text
     assert "(chars_after=1000000 is out of range; used 5000.)" in text
     assert len(text) < 5_000 + FOOTER_ROOM
