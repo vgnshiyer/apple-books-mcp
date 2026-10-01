@@ -358,6 +358,45 @@ def test_context_when_the_text_has_moved(library, tmp_path):
         "in the book's file on this Mac.")
 
 
+@pytest.fixture
+def broken(library, tmp_path):
+    """A downloaded EPUB with a highlight in chapter c1, whose files
+    the test breaks before adding the book."""
+    epub = write_epub(tmp_path / "Broken.epub", "Broken", [("c1", "One", ["Some words."])])
+
+    def add(location="epubcfi(/6/4[c1]!/4/2,/1:0,/1:10)"):
+        book = library.add_book("Broken", path=epub)
+        return library.add_annotation(book, "Some words", location=location)
+    return epub, add
+
+
+def test_context_when_the_chapter_file_is_missing(broken):
+    epub, add = broken
+    (epub / "OEBPS" / "c1.xhtml").unlink()
+    assert _message(lambda: get_annotation_context(add())) == (
+        "Could not read annotation context: Could not read EPUB entry "
+        "'OEBPS/c1.xhtml': No such file or directory")
+
+
+def test_context_when_the_chapter_file_points_outside(broken, tmp_path):
+    epub, add = broken
+    outside = tmp_path / "outside.xhtml"
+    outside.write_text("<html><body><p>Some words.</p></body></html>")
+    (epub / "OEBPS" / "c1.xhtml").unlink()
+    (epub / "OEBPS" / "c1.xhtml").symlink_to(outside)
+    assert _message(lambda: get_annotation_context(add())) == (
+        "Refused to read this book's file: EPUB entry 'OEBPS/c1.xhtml' points "
+        "outside the book bundle.")
+
+
+def test_context_when_the_chapter_is_not_in_the_book(broken):
+    _, add = broken
+    anno = add("epubcfi(/6/4[c9]!/4/2,/1:0,/1:10)")
+    assert _message(lambda: get_annotation_context(anno)) == (
+        "No surrounding context available: the highlight's chapter isn't in "
+        "the book's file on this Mac.")
+
+
 def test_context_for_a_pdf(library, tmp_path):
     pdf = tmp_path / "Paper.pdf"
     pdf.write_bytes(b"%PDF-1.4\n%%EOF\n")
