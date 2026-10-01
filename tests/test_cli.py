@@ -108,6 +108,7 @@ def test_server_reports_version_and_honours_verbosity(flags, shown, hidden):
     assert not hidden & logged, stderr
     if shown:
         assert f"apple-books-mcp {apple_books_mcp.__version__} (mcp " in stderr
+        assert re.search(r"\d+ tools run in worker threads, up to \d+ at a time", stderr)
     else:
         # FastMCP logs every request at INFO unless its setup is overridden.
         assert "Processing request" not in stderr, stderr

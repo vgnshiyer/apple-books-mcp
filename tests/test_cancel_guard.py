@@ -2,10 +2,13 @@
 
 The subprocess tests start the real server (plus a deliberately slow
 ``sleep`` tool) over stdio and cancel requests the way Claude Desktop and
-Claude Code do. To confirm they still catch the crash, run them with
+Claude Code do, with tools on the event loop (APPLE_BOOKS_MCP_THREADS=0,
+where the crash was found) and in worker threads (the default). To
+confirm they still catch the crash, run them with
 ABM_TEST_WITHOUT_CANCEL_GUARD=1, which starts the server unpatched.
 """
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -97,10 +100,11 @@ def test_install_skips_changed_internals(unpatched_responder, monkeypatch):
 class _StdioServer:
     """The server in a subprocess, driven with raw JSON-RPC over stdio."""
 
-    def __init__(self):
+    def __init__(self, env=None):
         self.proc = subprocess.Popen(
             [sys.executable, "-c", _LAUNCHER],
             cwd=REPO_ROOT,
+            env=dict(os.environ, **(env or {})),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -179,9 +183,10 @@ class _StdioServer:
             stream.close()
 
 
-@pytest.fixture
-def server():
-    server = _StdioServer()
+@pytest.fixture(params=["event-loop", "threads"])
+def server(request):
+    threads = "0" if request.param == "event-loop" else ""
+    server = _StdioServer(env={"APPLE_BOOKS_MCP_THREADS": threads})
     try:
         server.initialize()
         yield server
@@ -218,9 +223,10 @@ def test_cancel_two_parallel_calls(server):
 
 
 def test_cancel_twice_in_a_row(server):
-    # Interrupt a slow call (sync tools ignore it), ask again, interrupt
-    # again. The large first reply keeps stdout busy, so the retry's reply
-    # is still waiting to be sent when its cancel is processed.
+    # Interrupt a slow call (tools on the event loop ignore it), ask
+    # again, interrupt again. The large first reply keeps stdout busy, so
+    # the retry's reply is still waiting to be sent when its cancel is
+    # processed.
     first = server.call_sleep(1.0, size=200_000)
     time.sleep(0.3)
     server.cancel(first)
@@ -230,3 +236,21 @@ def test_cancel_twice_in_a_row(server):
     server.cancel(retry)
 
     _assert_still_serving(server)
+
+
+@pytest.mark.parametrize("server", ["threads"], indirect=True)
+def test_cancel_running_call_answers_at_once(server):
+    # A call running in a worker thread is answered as soon as it is
+    # cancelled; its thread finishes in the background.
+    slow = server.call_sleep(3.0)
+    time.sleep(0.3)
+    start = time.monotonic()
+    server.cancel(slow)
+
+    response = server.wait_for(slow, timeout=1.5)
+    assert response, server.stderr()
+    assert response["error"]["message"] == "Request cancelled"
+    assert time.monotonic() - start < 1.5
+    _assert_still_serving(server)
+    retry = server.call_sleep(0.1)
+    assert server.wait_for(retry, timeout=5)["result"]["content"][0]["text"] == "xxxx"

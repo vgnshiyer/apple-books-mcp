@@ -82,7 +82,7 @@ def main(verbose: int, enable_writes: bool) -> None:
 
     # Imported here so --help and --version work even when the server
     # can't be imported (e.g. an incompatible mcp release).
-    from apple_books_mcp import _cancel_guard
+    from apple_books_mcp import _cancel_guard, _runtime
     from apple_books_mcp.server import mcp, serve
 
     _configure_logging(verbose)
@@ -95,7 +95,13 @@ def main(verbose: int, enable_writes: bool) -> None:
 
     # Without this, serverInfo.version reports the mcp SDK's version.
     mcp._mcp_server.version = __version__
-    _cancel_guard.install()
+    # Tools move to worker threads only with the cancel guard in place:
+    # older mcp 1.x releases (1.6, for one) let the cancellation of any
+    # call that isn't blocking the event loop shut the server down.
+    if _cancel_guard.install():
+        _runtime.install(mcp)
+    else:
+        logger.info("Tools run on the event loop: no cancel guard for this mcp")
     serve()
 
 

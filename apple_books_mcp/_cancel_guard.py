@@ -6,7 +6,10 @@ handled the cancellation. When a host cancels a request whose response
 is already being sent (e.g. a call that was queued behind a slow tool),
 the cancellation therefore escapes the request handler and cancels the
 server's task group: the process stops answering and exits on the next
-message it reads.
+message it reads. Before mcp added its own check (it is in 1.30, not in
+1.6), the same happens whenever a cancellation interrupts a call that
+is awaiting something, such as a tool running in a worker thread
+(``_runtime``), so tools only move to threads with this guard in place.
 
 ``install()`` replaces that ``__exit__`` with one that returns the
 scope's verdict, and that treats a cancellation raised while closing an
