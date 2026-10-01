@@ -208,6 +208,22 @@ def _book_text(text: str, **attrs) -> str:
     return f"<book_text{attributes}>\n{body}\n</book_text>"
 
 
+# A chapter id comes from the book (its manifest or ToC ids, which
+# Apple Books copies into each CFI), and a crafted book can put quotes,
+# spaces and whole sentences in one. Outside an envelope, an id or a
+# CFI is shown only when it is a plain token like these.
+_PLAIN_ID = re.compile(r"[A-Za-z0-9_.:-]{1,128}")
+_PLAIN_CFI = re.compile(r"epubcfi\([A-Za-z0-9_.:/!,;=~^@\[\]-]{1,512}\)")
+
+
+def _plain_id(value) -> Optional[str]:
+    """``value`` if it is a plain id, safe to show and quote as is;
+    else None."""
+    if isinstance(value, str) and _PLAIN_ID.fullmatch(value):
+        return value
+    return None
+
+
 # ``_format_annotation_with_book`` (legacy) was dropped in v0.7.0 — it
 # used Apple's ``ZFUTUREPROOFING5`` chapter field, which is NULL for
 # most annotations. The grouped/flat formatters below replace it with
@@ -257,6 +273,8 @@ def _format_lean_row(annotation, chapter_map: dict) -> str:
       :mcp:`get_chapter_content` without round-tripping through
       ``list_book_chapters``
     * neither title nor id (bookmark, DRM, orphan) → bare ``[id]``
+
+    An id that isn't plain (:func:`_plain_id`) is left out.
     """
     text = _lean_annotation_text(annotation)
     chapter_id = (
@@ -265,6 +283,7 @@ def _format_lean_row(annotation, chapter_map: dict) -> str:
         else None
     )
     chapter_title = chapter_map.get(chapter_id, "") if chapter_id else ""
+    shown_id = _plain_id(chapter_id)
     aid = annotation.id
 
     parts = [f"[{aid}]"]
@@ -272,8 +291,8 @@ def _format_lean_row(annotation, chapter_map: dict) -> str:
         parts.append(text)
     if chapter_title:
         parts.append(f"— {chapter_title}")
-    if chapter_id:
-        parts.append(f"(ch={chapter_id})")
+    if shown_id:
+        parts.append(f"(ch={shown_id})")
 
     return " ".join(parts)
 
@@ -857,7 +876,7 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
     if resolution is None:
         return ""
 
-    call_hint = f'(use get_chapter_content({book.id}, "{resolution.chapter_id}") for the text)'
+    call_hint = _chapter_call_hint(book.id, resolution)
 
     if resolution.source == "toc":
         position = (
@@ -868,7 +887,7 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
         return f"\nCurrent chapter: {position} {resolution.title}  {call_hint}"
 
     if resolution.source == "cfi":
-        return f"\nCurrent chapter id: {resolution.chapter_id}  {call_hint}"
+        return f"\n{_untitled_chapter_line(book.id, resolution)}"
 
     # source == "recent_highlight" — proxy, not the bookmark itself.
     # Label clearly so the caller knows the provenance.
@@ -881,7 +900,28 @@ def _build_current_reading_section(api: "PyAppleBooks", book) -> str:
             f"\nCurrent chapter: {resolution.title}  {call_hint}"
             f"\n  {label}"
         )
-    return (
-        f"\nCurrent chapter id: {resolution.chapter_id}  {call_hint}"
-        f"\n  {label}"
-    )
+    return f"\n{_untitled_chapter_line(book.id, resolution)}\n  {label}"
+
+
+def _chapter_call_hint(book_id, resolution: _ChapterResolution) -> str:
+    """Where to get the resolved chapter's text: get_chapter_content
+    with its id, or with its order when the id isn't plain
+    (:func:`_plain_id`); without either, the chapter list."""
+    target = _plain_id(resolution.chapter_id)
+    if target is None and resolution.order is not None:
+        target = str(resolution.order)
+    if target is None:
+        return f"(list_book_chapters({book_id}) lists the chapters)"
+    return f'(use get_chapter_content({book_id}, "{target}") for the text)'
+
+
+def _untitled_chapter_line(book_id, resolution: _ChapterResolution) -> str:
+    """The current chapter by its id, when there is no title to show."""
+    call_hint = _chapter_call_hint(book_id, resolution)
+    chapter_id = _plain_id(resolution.chapter_id)
+    if chapter_id is None:
+        return (
+            "Current chapter: untitled, and its id isn't a plain name, so it "
+            f"isn't shown  {call_hint}"
+        )
+    return f"Current chapter id: {chapter_id}  {call_hint}"
