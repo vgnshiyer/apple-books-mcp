@@ -1,53 +1,129 @@
-name: Publish Python package 📦 to PyPI
+name: Release
+
+# One release, in order: build and check everything without credentials,
+# then PyPI, then the .mcpb on the GitHub release, then the MCP Registry
+# (which checks both exist) and the Docker image. Each publishing job
+# gets only the token it needs and runs no build tools.
 
 on:
   release:
     types: [published]
 
+permissions: {}
+
+# Releases publish one at a time, never cancelled halfway.
+concurrency:
+  group: release
+  cancel-in-progress: false
+
 jobs:
-  build-and-publish:
+  build:
     runs-on: ubuntu-latest
-    environment:
-      name: pypi
-      url: https://pypi.org/project/apple-books-mcp/
     permissions:
       contents: read
-      id-token: write
-
     steps:
-      - name: Checkout code
-        uses: actions/checkout@v4
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          python-version: '3.x'
+          persist-credentials: false
 
-      - name: Install uv
-        run: |
-          curl -Ls https://astral.sh/uv/install.sh | sh
-          echo "$HOME/.cargo/bin" >> $GITHUB_PATH
+      - name: Check the tag matches every version field
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: python3 scripts/build_mcpb.py --check-version "${TAG#v}"
 
-      - name: Setup virtual environment and install dependencies
-        run: |
-          uv venv
-          uv pip install build twine
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
 
-      - name: Build the package
-        run: |
-          uv run python -m build
+      - name: Build the sdist and wheel
+        run: uv build
 
-      - name: Smoke-test the built wheel
+      - name: Stub the Apple Books databases
         run: |
           d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
           mkdir -p "$d/BKLibrary" "$d/AEAnnotation"
           touch "$d/BKLibrary/BKLibrary-stub.sqlite" "$d/AEAnnotation/AEAnnotation-stub.sqlite"
-          python3 scripts/smoke_test.py uvx --refresh --from dist/*.whl apple-books-mcp
 
-      - name: Publish package
-        uses: pypa/gh-action-pypi-publish@release/v1
+      - name: Smoke-test the wheel as users install it
+        run: python3 scripts/smoke_test.py uvx --refresh --from dist/*.whl apple-books-mcp
+
+      - name: Build the Claude Desktop extension and the registry's server.json
+        run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
+
+      - name: Smoke-test the extension as Claude Desktop installs it
+        run: python3 scripts/build_mcpb.py --smoke mcpb-dist/*.mcpb
+
+      - name: Install mcp-publisher
+        run: |
+          curl -sSL -o mcp-publisher.tar.gz \
+            https://github.com/modelcontextprotocol/registry/releases/download/v1.8.1/mcp-publisher_linux_amd64.tar.gz
+          echo "a06c9096dcb9727c13555b6be26c7effa707b01f06a4c561ba7a3635443cf2cc  mcp-publisher.tar.gz" | sha256sum -c -
+          tar xzf mcp-publisher.tar.gz mcp-publisher
+
+      - name: Validate server.json against the registry
+        run: ./mcp-publisher validate mcpb-dist/server.json
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          skip-existing: true
+          name: python-dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcpb
+          path: |
+            mcpb-dist/*.mcpb
+            mcpb-dist/server.json
+          if-no-files-found: error
+
+  pypi:
+    needs: build
+    runs-on: ubuntu-latest
+    # PyPI's trusted publisher is this workflow file plus this environment.
+    environment:
+      name: pypi
+      url: https://pypi.org/project/apple-books-mcp/
+    permissions:
+      id-token: write # PyPI trusted publishing
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: python-dist
+          path: dist/
+
+      # No skip-existing: re-uploading a version must fail loudly.
+      - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+
+  mcpb:
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write # upload a release asset
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mcpb
+          path: mcpb-dist/
+
+      - name: Attach the extension to the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.event.release.tag_name }}
+        run: gh release upload "$TAG" mcpb-dist/*.mcpb --repo "$GITHUB_REPOSITORY"
+
+  registry:
+    needs: [pypi, mcpb]
+    runs-on: ubuntu-latest
+    permissions:
+      id-token: write # mcp-publisher login github-oidc
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: mcpb
+          path: mcpb-dist/
 
       - name: Install mcp-publisher
         run: |
@@ -57,13 +133,45 @@ jobs:
           tar xzf mcp-publisher.tar.gz mcp-publisher
 
       - name: Publish server.json to the MCP Registry
-        # The registry verifies the PyPI release, which can take a minute
+        # The registry checks the PyPI release, which can take a minute
         # to become visible after upload, so retry before failing.
         run: |
           ./mcp-publisher login github-oidc
           for attempt in 1 2 3 4 5 6; do
-            ./mcp-publisher publish && exit 0
+            ./mcp-publisher publish mcpb-dist/server.json && exit 0
             echo "Registry publish attempt $attempt failed; retrying in 30s"
             sleep 30
           done
           exit 1
+
+  docker:
+    # Deprecated image (see README), still published for existing users.
+    needs: pypi
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write # push to ghcr.io
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Version from the tag
+        id: version
+        env:
+          TAG: ${{ github.event.release.tag_name }}
+        run: echo "version=${TAG#v}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/build-push-action@c3c9e263c25d99ce0380d002d59b67737d91b0dc # v7.4.0
+        with:
+          context: .
+          push: true
+          tags: |
+            ghcr.io/${{ github.repository }}:latest
+            ghcr.io/${{ github.repository }}:${{ steps.version.outputs.version }}
