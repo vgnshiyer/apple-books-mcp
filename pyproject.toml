@@ -25,6 +25,9 @@ dependencies = [
     # release whose tools take a title (and protocol 2025-06-18).
     "mcp>=1.10.0,<2",
     "py-apple-books>=1.10,<2",
+    # Imported directly for the tool parameter types; mcp 1.x requires
+    # the same range.
+    "pydantic>=2.7.2,<3",
 ]
 
 [build-system]
