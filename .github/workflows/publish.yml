@@ -4,6 +4,17 @@ name: Release
 # then PyPI, then the .mcpb on the GitHub release, then the MCP Registry
 # (which checks both exist) and the Docker image. Each publishing job
 # gets only the token it needs and runs no build tools.
+#
+# The Python packages and the extension are built in separate jobs, so
+# the packer's npm tree never runs where the wheel is made, and every
+# job that publishes an artifact first checks its files against the
+# sha256 sums the job that built them recorded: an artifact swapped by
+# another job in the run fails the release.
+#
+# The .mcpb is uploaded to the release after it is published. If
+# immutable releases are ever turned on for this repo, that upload
+# fails after PyPI has published: build and attach the assets before
+# publishing instead (say, on a tag push, creating the release last).
 
 on:
   release:
@@ -11,7 +22,9 @@ on:
 
 permissions: {}
 
-# Releases publish one at a time, never cancelled halfway.
+# Releases publish one at a time, never cancelled halfway. GitHub keeps
+# only one run waiting: if three releases are published while one is
+# running, the middle one is cancelled and has to be re-run.
 concurrency:
   group: release
   cancel-in-progress: false
@@ -21,6 +34,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: read
+    outputs:
+      sha256sums: ${{ steps.sums.outputs.sha256sums }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -38,6 +53,23 @@ jobs:
       - name: Build the sdist and wheel
         run: uv build
 
+      - name: Record their sha256 sums
+        id: sums
+        run: |
+          {
+            echo "sha256sums<<EOF"
+            (cd dist && sha256sum -- *.whl *.tar.gz | LC_ALL=C sort)
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: python-dist
+          path: |
+            dist/*.whl
+            dist/*.tar.gz
+          if-no-files-found: error
+
       - name: Stub the Apple Books databases
         run: |
           d="$HOME/Library/Containers/com.apple.iBooksX/Data/Documents"
@@ -47,6 +79,21 @@ jobs:
       - name: Smoke-test the wheel as users install it
         run: python3 scripts/smoke_test.py uvx --refresh --from dist/*.whl apple-books-mcp
 
+  bundle:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    outputs:
+      sha256sums: ${{ steps.sums.outputs.sha256sums }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
+        with:
+          enable-cache: false
+
       # The packer and its dependencies exactly as mcpb/package-lock.json
       # pins them, without running their install scripts.
       - name: Install the MCPB packer
@@ -54,6 +101,23 @@ jobs:
 
       - name: Build the Claude Desktop extension and the registry's server.json
         run: uv run --locked python scripts/build_mcpb.py --out mcpb-dist
+
+      - name: Record their sha256 sums
+        id: sums
+        run: |
+          {
+            echo "sha256sums<<EOF"
+            (cd mcpb-dist && sha256sum -- *.mcpb server.json | LC_ALL=C sort)
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: mcpb
+          path: |
+            mcpb-dist/*.mcpb
+            mcpb-dist/server.json
+          if-no-files-found: error
 
       - name: Smoke-test the extension as Claude Desktop installs it
         run: python3 scripts/build_mcpb.py --smoke mcpb-dist/*.mcpb
@@ -68,24 +132,8 @@ jobs:
       - name: Validate server.json against the registry
         run: ./mcp-publisher validate mcpb-dist/server.json
 
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: python-dist
-          path: |
-            dist/*.whl
-            dist/*.tar.gz
-          if-no-files-found: error
-
-      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
-        with:
-          name: mcpb
-          path: |
-            mcpb-dist/*.mcpb
-            mcpb-dist/server.json
-          if-no-files-found: error
-
   pypi:
-    needs: build
+    needs: [build, bundle]
     runs-on: ubuntu-latest
     # PyPI's trusted publisher is this workflow file plus this environment.
     environment:
@@ -99,11 +147,18 @@ jobs:
           name: python-dist
           path: dist/
 
+      - name: Check the files are the ones the build job made
+        env:
+          SHA256SUMS: ${{ needs.build.outputs.sha256sums }}
+        run: |
+          printf '%s\n' "$SHA256SUMS" > "$RUNNER_TEMP/expected"
+          (cd dist && sha256sum -- * | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+
       # No skip-existing: re-uploading a version must fail loudly.
       - uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
 
   mcpb:
-    needs: pypi
+    needs: [bundle, pypi]
     runs-on: ubuntu-latest
     permissions:
       contents: write # upload a release asset
@@ -113,6 +168,13 @@ jobs:
           name: mcpb
           path: mcpb-dist/
 
+      - name: Check the files are the ones the bundle job made
+        env:
+          SHA256SUMS: ${{ needs.bundle.outputs.sha256sums }}
+        run: |
+          printf '%s\n' "$SHA256SUMS" > "$RUNNER_TEMP/expected"
+          (cd mcpb-dist && sha256sum -- * | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
+
       - name: Attach the extension to the release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -120,7 +182,7 @@ jobs:
         run: gh release upload "$TAG" mcpb-dist/*.mcpb --repo "$GITHUB_REPOSITORY"
 
   registry:
-    needs: [pypi, mcpb]
+    needs: [bundle, pypi, mcpb]
     runs-on: ubuntu-latest
     permissions:
       id-token: write # mcp-publisher login github-oidc
@@ -129,6 +191,13 @@ jobs:
         with:
           name: mcpb
           path: mcpb-dist/
+
+      - name: Check the files are the ones the bundle job made
+        env:
+          SHA256SUMS: ${{ needs.bundle.outputs.sha256sums }}
+        run: |
+          printf '%s\n' "$SHA256SUMS" > "$RUNNER_TEMP/expected"
+          (cd mcpb-dist && sha256sum -- * | LC_ALL=C sort) | diff "$RUNNER_TEMP/expected" -
 
       - name: Install mcp-publisher
         run: |
