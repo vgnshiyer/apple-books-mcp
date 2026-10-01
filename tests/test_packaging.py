@@ -100,6 +100,20 @@ def test_release_tag_guard_missing_field(tmp_path):
         build_mcpb.project_version(tmp_path)
 
 
+def test_release_tag_guard_every_package(tmp_path):
+    """Every server.json package's version is checked, two of one type
+    included."""
+    for name in ("pyproject.toml", "server.json", "uv.lock", "apple_books_mcp/__init__.py"):
+        (tmp_path / name).parent.mkdir(exist_ok=True)
+        (tmp_path / name).write_text((ROOT / name).read_text(encoding="utf-8"), encoding="utf-8")
+    version = build_mcpb.project_version()
+    server = json.loads((tmp_path / "server.json").read_text(encoding="utf-8"))
+    server["packages"].insert(0, {**server["packages"][0], "version": "0.0.1"})
+    (tmp_path / "server.json").write_text(json.dumps(server), encoding="utf-8")
+    assert build_mcpb.tag_problems("v" + version, tmp_path) == \
+        {"server.json packages[0] (pypi)": "0.0.1"}
+
+
 # -- Claude Desktop extension -------------------------------------------------
 
 def _rendered():

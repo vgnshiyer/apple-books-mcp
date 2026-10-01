@@ -68,12 +68,13 @@ def bundle_name(version: str) -> str:
 # -- versions ---------------------------------------------------------------
 
 # Every place the release version is written. A field that can't be
-# found fails the checks rather than dropping out of them.
+# found fails the checks rather than dropping out of them. Any other
+# server.json package with a version is checked too.
 VERSION_FIELDS = (
     "pyproject.toml",
     "apple_books_mcp/__init__.py",
     "server.json version",
-    "server.json packages (pypi)",
+    "server.json packages[0] (pypi)",
     "uv.lock",
 )
 
@@ -100,9 +101,10 @@ def version_fields(root: Path = ROOT) -> dict:
         fields["apple_books_mcp/__init__.py"] = init.group(1)
     server = json.loads((root / "server.json").read_text(encoding="utf-8"))
     fields["server.json version"] = server.get("version")
-    for package in server.get("packages", []):
+    # By position: two packages of one type are two fields.
+    for n, package in enumerate(server.get("packages", [])):
         if "version" in package:
-            fields[f"server.json packages ({package.get('registryType')})"] = package["version"]
+            fields[f"server.json packages[{n}] ({package.get('registryType')})"] = package["version"]
     lock = re.search(r'^name = "apple-books-mcp"\nversion = "([^"]+)"',
                      (root / "uv.lock").read_text(encoding="utf-8"), re.M)
     if lock:
