@@ -27,6 +27,11 @@ from apple_books_mcp.server import mcp
 
 ROOT = Path(__file__).resolve().parent.parent
 
+# The sdist ships tests/ but not what these tests check (scripts/,
+# mcpb/, server.json, the Dockerfile, the workflows).
+if (ROOT / "PKG-INFO").is_file():
+    pytest.skip("release packaging files aren't in the sdist", allow_module_level=True)
+
 
 def _load_build_mcpb():
     spec = importlib.util.spec_from_file_location("build_mcpb", ROOT / "scripts" / "build_mcpb.py")
