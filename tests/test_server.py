@@ -433,6 +433,9 @@ def test_get_annotation_context_marks_highlight(mock_apple_books):
     assert "«Test text»" in result.text
     assert "Some preceding text" in result.text
     assert "Some following text" in result.text
+    # Book text arrives in one untrusted-content envelope.
+    assert result.text.startswith(f'<book_text book_id="{BOOK_ID}" annotation_id="1">\n')
+    assert result.text.endswith("\n</book_text>")
     mock_apple_books.get_annotation_surrounding_text.assert_called_once_with(
         1, chars_before=500, chars_after=500
     )
