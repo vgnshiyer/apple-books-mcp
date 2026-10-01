@@ -353,5 +353,7 @@ def test_actions_pinned_by_sha(workflow):
     uses = re.findall(r"^\s*(?:-\s*)?uses:\s*(\S+)(.*)$", workflow.read_text(encoding="utf-8"), re.M)
     assert uses
     for action, comment in uses:
+        if action.startswith("./"):  # a workflow in this repo, at this commit
+            continue
         assert re.fullmatch(r"[\w.-]+/[\w./-]+@[0-9a-f]{40}", action), action
         assert re.match(r"\s*# v\d", comment), f"{action}: add a '# vX.Y.Z' comment"
