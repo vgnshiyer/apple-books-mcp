@@ -6,8 +6,10 @@ Checked through an in-memory client session, on whichever mcp 1.x is
 installed (the lock pins the floor, a fresh install gets the latest).
 """
 import asyncio
+from unittest.mock import patch
 
 import pytest
+from mcp.server.fastmcp.utilities.func_metadata import func_metadata
 from mcp.shared.memory import create_connected_server_and_client_session
 from py_apple_books import PyAppleBooks
 from py_apple_books.testing import FixtureLibrary, write_epub
@@ -245,6 +247,36 @@ def test_a_non_numeric_id_gets_a_clear_error(library, value):
     assert is_error
     assert f"book_id must be a numeric id, like the 175 in \"[175] Title\", not {value!r}." in text
     assert "validation error" not in text
+
+
+@pytest.mark.parametrize("value, shown", [(1.5, "'1.5'"), (None, "'null'")])
+def test_a_fractional_or_null_id_gets_a_clear_error(library, value, shown):
+    is_error, text = _call("describe_book", {"book_id": value})
+    assert is_error
+    assert text.endswith(
+        f"book_id must be a numeric id, like the 175 in \"[175] Title\", not {shown}.")
+
+
+def _plain_strings_kept():
+    """mcp 1.10 JSON-decodes every string argument; later 1.x keep a
+    str parameter's value as sent."""
+    def probe(text: str): ...
+    return func_metadata(probe).pre_parse_json({"text": "[1]"}) == {"text": "[1]"}
+
+
+@pytest.mark.skipif(not _plain_strings_kept(),
+                    reason="this mcp JSON-decodes every string argument")
+@pytest.mark.parametrize("details", ['["to read", "maybe"]', '{"a": 1}', "null", "5", None])
+def test_details_are_passed_on_as_given(monkeypatch, details):
+    """0.8 passed details on verbatim; a JSON-looking string is not
+    decoded into a list, an object or a null."""
+    monkeypatch.setenv("APPLE_BOOKS_MCP_ENABLE_WRITES", "1")
+    with patch.object(server, "apple_books") as api:
+        api.create_collection.return_value.id = 9
+        api.create_collection.return_value.title = "X"
+        is_error, text = _call("create_collection", {"title": "X", "details": details})
+    assert not is_error, text
+    api.create_collection.assert_called_once_with("X", details)
 
 
 @pytest.mark.parametrize("name, param", [
