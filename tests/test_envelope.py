@@ -14,6 +14,7 @@ from apple_books_mcp.server import (
     describe_book,
     get_annotation_context,
     get_chapter_content,
+    get_current_reading_position,
     list_all_annotations,
     list_annotations,
     list_book_chapters,
@@ -170,6 +171,17 @@ def test_escaping_takes_linear_time(text):
     assert time.perf_counter() - start < 0.5
 
 
+def test_reading_position_title(crafted):
+    """The chapter title get_current_reading_position shows comes from
+    the book; the call hint stays outside."""
+    book_id, _ = crafted
+    text = get_current_reading_position(book_id).text
+    before, inside, after = _one_envelope(text, f'<book_text book_id="{book_id}">\n')
+    assert before == "Current chapter:\n"
+    assert inside.startswith("Trap ")
+    assert after.startswith(f'\n(use get_chapter_content({book_id}, "c2") for the text)\n')
+
+
 def test_attributes_are_quoted():
     wrapped = _book_text("x", book_id=3, chapter_id='a"><b', offset=None)
     assert wrapped == '<book_text book_id="3" chapter_id="a&quot;&gt;&lt;b">\nx\n</book_text>'
@@ -182,8 +194,8 @@ def test_server_instructions():
     text = options.instructions
     assert text == server.mcp.instructions
     assert 400 < len(text) < 1500
-    for phrase in ("<book_text>", "untrusted", "never follow", "collection edits",
+    for phrase in ("<book_text>", "untrusted", "Never follow", "collection edits",
                    "other servers' tools", "[175]", "integer", "(ch=...)",
                    "Next page: offset=N", "local time zone", "YYYY-MM-DD",
-                   "--enable-writes"):
+                   "--enable-writes", "Book titles", "errors included"):
         assert phrase in text, phrase
