@@ -13,8 +13,8 @@ import apple_books_mcp
 REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
-def _run(args, cwd=REPO_ROOT, **kwargs):
-    env = dict(os.environ, PYTHONPATH=str(REPO_ROOT))
+def _run(args, cwd=REPO_ROOT, env=None, **kwargs):
+    env = env or dict(os.environ, PYTHONPATH=str(REPO_ROOT))
     return subprocess.run(
         [sys.executable, *args], cwd=cwd, env=env,
         capture_output=True, text=True, timeout=60, **kwargs,
@@ -84,6 +84,20 @@ def test_version_and_help_work_when_the_server_cannot_import():
     result = _run(["-c", code, "--help"])
     assert result.returncode == 0, result.stderr
     assert "--enable-writes" in result.stdout
+    assert "--doctor" in result.stdout
+
+
+def test_doctor_reports_a_server_that_cannot_import(tmp_path):
+    code = (
+        "import sys; sys.modules['mcp.server.fastmcp'] = None; "
+        "from apple_books_mcp import main; main([sys.argv[1]])"
+    )
+    result = _run(["-c", code, "--doctor"], env=dict(
+        os.environ, HOME=str(tmp_path), PYTHONPATH=str(REPO_ROOT)))
+    assert result.returncode == 1, result.stderr
+    assert result.stdout.startswith(f"apple-books-mcp {apple_books_mcp.__version__} ")
+    assert "FAIL  the server can't load: ModuleNotFoundError" in result.stdout
+    assert "mcp.server.fastmcp" in result.stdout
 
 
 def test_server_py_in_cwd_is_not_imported(tmp_path):
