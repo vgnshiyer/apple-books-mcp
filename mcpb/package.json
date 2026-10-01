@@ -1,0 +1,8 @@
+{
+  "name": "apple-books-mcp-bundle-tools",
+  "private": true,
+  "description": "The MCPB packer scripts/build_mcpb.py runs, locked with its dependencies. Install: npm ci --ignore-scripts --prefix mcpb",
+  "devDependencies": {
+    "@anthropic-ai/mcpb": "2.1.2"
+  }
+}

@@ -25,12 +25,12 @@ def library(tmp_path, monkeypatch):
     api.close()
 
 
-def test_thirty_tools_without_output_schema():
+def test_thirty_one_tools_without_output_schema():
     """F06: from mcp 1.10 on, a ``-> TextContent`` return annotation
     made FastMCP publish a ~900-char outputSchema per tool. Unannotated
     tools publish none, on every mcp 1.x."""
     tools = asyncio.run(mcp.list_tools())
-    assert len(tools) == 30
+    assert len(tools) == 31
     assert [t.name for t in tools if getattr(t, "outputSchema", None)] == []
 
 
@@ -59,8 +59,8 @@ def test_currently_reading_description_matches_content(library):
     resources = asyncio.run(mcp.list_resources())
     (resource,) = [r for r in resources if str(r.uri) == "apple-books://currently-reading"]
     description = resource.description.lower()
-    for item in ("title", "author", "book id", "progress", "chapter",
-                 "chapter_id", "how many highlights"):
+    for item in ("title", "author", "book id", "progress", "open in books",
+                 "chapter", "chapter_id", "how many highlights"):
         assert item in description, item
     assert "no chapter text" in description
 
@@ -76,6 +76,7 @@ def test_currently_reading_description_matches_content(library):
     assert "Currently Reading: Pointer Book by Pointer Author" in content
     assert f"Book id: {book['id']}" in content
     assert "Progress: In Progress (40.0%)" in content
+    assert f"Open in Books: ibooks://assetid/{book['asset_id']}" in content
     # Live highlights only, counted without loading them.
     assert f"Highlights in this book: 2  (use list_annotations({book['id']}) to browse)" in content
     assert "pointer highlight" not in content

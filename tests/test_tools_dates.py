@@ -7,6 +7,7 @@ import time
 from datetime import date, datetime, timedelta
 
 import pytest
+from mcp.server.fastmcp.exceptions import ToolError
 from py_apple_books import PyAppleBooks
 from py_apple_books.testing import FixtureLibrary
 
@@ -89,8 +90,9 @@ def test_iso_datetimes_are_accepted(library):
 
 @pytest.mark.parametrize("after", ["2025/01/01", "last week", "2025-13-01"])
 def test_bad_dates_get_a_clear_message(library, after):
-    text = get_annotations_by_date_range(after=after).text
-    assert text == (
+    with pytest.raises(ToolError) as raised:
+        get_annotations_by_date_range(after=after)
+    assert str(raised.value) == (
         f"after={after!r} is not a date. Use YYYY-MM-DD, or "
         "YYYY-MM-DDTHH:MM for a time of day."
     )
@@ -98,8 +100,9 @@ def test_bad_dates_get_a_clear_message(library, after):
 
 def test_inverted_range_says_so(library):
     _seed_january(library)
-    text = get_annotations_by_date_range(after="2025-02-01", before="2025-01-01").text
-    assert text == (
+    with pytest.raises(ToolError) as raised:
+        get_annotations_by_date_range(after="2025-02-01", before="2025-01-01")
+    assert str(raised.value) == (
         "after (2025-02-01 00:00) is later than before (2025-01-01 23:59), "
         "so no annotation can match. Swap them."
     )

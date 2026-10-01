@@ -3,19 +3,48 @@
   "name": "io.github.vgnshiyer/apple-books-mcp",
   "title": "Apple Books",
   "description": "Access your Apple Books library, annotations, reading progress, and highlights through Claude",
+  "websiteUrl": "https://vgnshiyer.me/AppleBooksMcp",
   "repository": {
     "url": "https://github.com/vgnshiyer/apple-books-mcp",
-    "source": "github"
+    "source": "github",
+    "id": "961227279"
   },
-  "version": "0.8.4",
+  "version": "0.9.0",
   "packages": [
     {
       "registryType": "pypi",
+      "registryBaseUrl": "https://pypi.org",
       "identifier": "apple-books-mcp",
-      "version": "0.8.4",
+      "version": "0.9.0",
+      "runtimeHint": "uvx",
       "transport": {
         "type": "stdio"
-      }
+      },
+      "environmentVariables": [
+        {
+          "name": "APPLE_BOOKS_MCP_ENABLE_WRITES",
+          "description": "Allow the collection write tools (create, rename and delete collections; add and remove books). Writes refuse to run while Books is open and take a backup first.",
+          "format": "boolean",
+          "default": "false"
+        },
+        {
+          "name": "APPLE_BOOKS_DATA_DIR",
+          "description": "Folder holding the Apple Books stores (BKLibrary and AEAnnotation), if not ~/Library/Containers/com.apple.iBooksX/Data/Documents.",
+          "format": "filepath"
+        },
+        {
+          "name": "APPLE_BOOKS_MCP_THREADS",
+          "description": "How many tool calls may run at once (default 8; 0 runs them one at a time on the event loop).",
+          "format": "number",
+          "default": "8"
+        },
+        {
+          "name": "APPLE_BOOKS_QUERY_TIMEOUT",
+          "description": "Seconds a library query may run before it is stopped (default 30; 0 for no limit).",
+          "format": "number",
+          "default": "30"
+        }
+      ]
     }
   ]
 }

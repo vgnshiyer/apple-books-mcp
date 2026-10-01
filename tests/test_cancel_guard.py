@@ -2,10 +2,13 @@
 
 The subprocess tests start the real server (plus a deliberately slow
 ``sleep`` tool) over stdio and cancel requests the way Claude Desktop and
-Claude Code do. To confirm they still catch the crash, run them with
+Claude Code do, with tools on the event loop (APPLE_BOOKS_MCP_THREADS=0,
+where the crash was found) and in worker threads (the default). To
+confirm they still catch the crash, run them with
 ABM_TEST_WITHOUT_CANCEL_GUARD=1, which starts the server unpatched.
 """
 import json
+import os
 import queue
 import subprocess
 import sys
@@ -40,18 +43,29 @@ apple_books_mcp.main(args=[])
 
 @pytest.fixture
 def unpatched_responder(monkeypatch):
-    # Restores the original __exit__ after the test.
-    monkeypatch.setattr(RequestResponder, "__exit__", RequestResponder.__exit__)
+    # Restores the original methods after the test.
+    for name in ("__exit__", "respond"):
+        monkeypatch.setattr(RequestResponder, name, getattr(RequestResponder, name))
 
 
-def _responder(on_complete):
+def _responder(on_complete, session=None):
     return RequestResponder(
         request_id=1,
         request_meta=None,
         request=None,
-        session=None,
+        session=session,
         on_complete=on_complete,
     )
+
+
+class _Session:
+    """Records the responses a RequestResponder sends."""
+
+    def __init__(self):
+        self.sent = []
+
+    async def _send_response(self, request_id, response):
+        self.sent.append(response)
 
 
 def test_install_keeps_a_cancelled_response_inside_the_request(unpatched_responder):
@@ -71,18 +85,56 @@ def test_install_keeps_a_cancelled_response_inside_the_request(unpatched_respond
     assert len(completed) == 1
 
 
+def test_install_drops_the_response_to_a_request_cancel_answered(unpatched_responder):
+    # A tool's thread finishes just as the host's cancel arrives: anyio
+    # doesn't interrupt the handler, which goes on to respond() after
+    # cancel() has sent "Request cancelled". Unpatched, respond()'s
+    # assertion fails and takes the server down.
+    assert _cancel_guard.install()
+    session = _Session()
+
+    async def cancel_then_respond():
+        responder = _responder(lambda _: None, session)
+        with responder:
+            await responder.cancel()
+            await responder.respond("the tool's result")
+        return "handled"
+
+    assert anyio.run(cancel_then_respond) == "handled"
+    assert [r.message for r in session.sent] == ["Request cancelled"]
+
+    async def respond():
+        responder = _responder(lambda _: None, session)
+        with responder:
+            await responder.respond("the tool's result")
+        # Responding twice is still the bug it always was.
+        with pytest.raises(AssertionError):
+            with responder:
+                await responder.respond("again")
+
+    anyio.run(respond)
+    assert session.sent[1:] == ["the tool's result"]
+
+
 def test_install_is_idempotent(unpatched_responder):
     assert _cancel_guard.install()
-    patched = RequestResponder.__exit__
+    patched = RequestResponder.__exit__, RequestResponder.respond
     assert _cancel_guard.install()
-    assert RequestResponder.__exit__ is patched
+    assert (RequestResponder.__exit__, RequestResponder.respond) == patched
+
+
+def test_can_install_patches_nothing(unpatched_responder):
+    original = RequestResponder.__exit__, RequestResponder.respond
+    assert _cancel_guard.can_install()
+    assert (RequestResponder.__exit__, RequestResponder.respond) == original
 
 
 def test_install_skips_other_mcp_major_versions(unpatched_responder, monkeypatch):
-    original = RequestResponder.__exit__
+    original = RequestResponder.__exit__, RequestResponder.respond
     monkeypatch.setattr(_cancel_guard, "_mcp_version", lambda: "2.2.0")
+    assert not _cancel_guard.can_install()
     assert not _cancel_guard.install()
-    assert RequestResponder.__exit__ is original
+    assert (RequestResponder.__exit__, RequestResponder.respond) == original
 
 
 def test_install_skips_changed_internals(unpatched_responder, monkeypatch):
@@ -90,17 +142,32 @@ def test_install_skips_changed_internals(unpatched_responder, monkeypatch):
         return self._scope.__exit__(exc_type, exc_val, exc_tb)
 
     monkeypatch.setattr(RequestResponder, "__exit__", upstream_exit)
+    assert not _cancel_guard.can_install()
     assert not _cancel_guard.install()
     assert RequestResponder.__exit__ is upstream_exit
+
+
+def test_install_skips_a_changed_respond(unpatched_responder, monkeypatch):
+    # The other patch still applies, but install() reports the guard as
+    # incomplete, so tools stay on the event loop.
+    async def upstream_respond(self, response):
+        await self._session._send_response(request_id=self.request_id, response=response)
+
+    monkeypatch.setattr(RequestResponder, "respond", upstream_respond)
+    assert not _cancel_guard.can_install()
+    assert not _cancel_guard.install()
+    assert RequestResponder.respond is upstream_respond
+    assert getattr(RequestResponder.__exit__, "_apple_books_mcp_patch", False)
 
 
 class _StdioServer:
     """The server in a subprocess, driven with raw JSON-RPC over stdio."""
 
-    def __init__(self):
+    def __init__(self, env=None):
         self.proc = subprocess.Popen(
             [sys.executable, "-c", _LAUNCHER],
             cwd=REPO_ROOT,
+            env=dict(os.environ, **(env or {})),
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
@@ -179,9 +246,10 @@ class _StdioServer:
             stream.close()
 
 
-@pytest.fixture
-def server():
-    server = _StdioServer()
+@pytest.fixture(params=["event-loop", "threads"])
+def server(request):
+    threads = "0" if request.param == "event-loop" else ""
+    server = _StdioServer(env={"APPLE_BOOKS_MCP_THREADS": threads})
     try:
         server.initialize()
         yield server
@@ -218,9 +286,10 @@ def test_cancel_two_parallel_calls(server):
 
 
 def test_cancel_twice_in_a_row(server):
-    # Interrupt a slow call (sync tools ignore it), ask again, interrupt
-    # again. The large first reply keeps stdout busy, so the retry's reply
-    # is still waiting to be sent when its cancel is processed.
+    # Interrupt a slow call (tools on the event loop ignore it), ask
+    # again, interrupt again. The large first reply keeps stdout busy, so
+    # the retry's reply is still waiting to be sent when its cancel is
+    # processed.
     first = server.call_sleep(1.0, size=200_000)
     time.sleep(0.3)
     server.cancel(first)
@@ -230,3 +299,37 @@ def test_cancel_twice_in_a_row(server):
     server.cancel(retry)
 
     _assert_still_serving(server)
+
+
+@pytest.mark.parametrize("server", ["threads"], indirect=True)
+def test_cancel_as_the_thread_finishes(server):
+    # The cancel races the end of a short call: sometimes the thread is
+    # still running, sometimes its result is already on its way, and
+    # sometimes cancel() has answered after the thread finished but
+    # before the handler resumed (without the respond() patch, that one
+    # took the server down a few times in 30).
+    for _ in range(30):
+        call = server.call_sleep(0.01, size=200_000)
+        time.sleep(0.01)
+        server.cancel(call)
+        assert server.wait_for(call, timeout=5), server.stderr()
+        assert server.wait_for(server.request("ping"), timeout=5), server.stderr()
+    _assert_still_serving(server)
+
+
+@pytest.mark.parametrize("server", ["threads"], indirect=True)
+def test_cancel_running_call_answers_at_once(server):
+    # A call running in a worker thread is answered as soon as it is
+    # cancelled; its thread finishes in the background.
+    slow = server.call_sleep(3.0)
+    time.sleep(0.3)
+    start = time.monotonic()
+    server.cancel(slow)
+
+    response = server.wait_for(slow, timeout=1.5)
+    assert response, server.stderr()
+    assert response["error"]["message"] == "Request cancelled"
+    assert time.monotonic() - start < 1.5
+    _assert_still_serving(server)
+    retry = server.call_sleep(0.1)
+    assert server.wait_for(retry, timeout=5)["result"]["content"][0]["text"] == "xxxx"

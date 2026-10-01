@@ -1,0 +1,48 @@
+version: 2
+updates:
+  # Actions are pinned by commit; Dependabot moves the SHA and the
+  # version comment together. Not the uv that setup-uv installs (its
+  # `version:` input, the same in every workflow): bump that by hand, to
+  # a version setup-uv lists in its known checksums.
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      github-actions:
+        patterns: ["*"]
+
+  # uv.lock only: the bounds in pyproject.toml (mcp<2, the Python floor)
+  # are deliberate, and users resolve them fresh anyway. The lock is what
+  # the Claude Desktop extension installs, so it should stay current;
+  # CI's floor job tests the declared minimums.
+  - package-ecosystem: uv
+    directory: /
+    schedule:
+      interval: weekly
+    versioning-strategy: lockfile-only
+    cooldown:
+      default-days: 7
+    groups:
+      python:
+        patterns: ["*"]
+
+  # The MCPB packer scripts/build_mcpb.py runs, locked with its tree.
+  - package-ecosystem: npm
+    directory: /mcpb
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7
+    groups:
+      mcpb:
+        patterns: ["*"]
+
+  - package-ecosystem: docker
+    directory: /
+    schedule:
+      interval: weekly
+    cooldown:
+      default-days: 7

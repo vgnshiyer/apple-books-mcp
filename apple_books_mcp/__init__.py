@@ -5,9 +5,18 @@ import os
 import platform
 import sys
 
-__version__ = "0.8.4"
+__version__ = "0.9.0"
 
 logger = logging.getLogger("apple-books-mcp")
+
+ENV_ENABLE_WRITES = "APPLE_BOOKS_MCP_ENABLE_WRITES"
+
+
+def _writes_from_env() -> bool:
+    """APPLE_BOOKS_MCP_ENABLE_WRITES as set by --enable-writes ("1") or by
+    a client's boolean setting (Claude Desktop's extension sends "true")."""
+    value = os.environ.get(ENV_ENABLE_WRITES, "")
+    return value.strip().lower() in ("1", "true", "yes")
 
 
 def _dist_version(name: str) -> str:
@@ -75,18 +84,34 @@ def _configure_logging(verbose: int) -> None:
     callback=_print_version,
     help="Show the apple-books-mcp, mcp and py-apple-books versions and exit.",
 )
-def main(verbose: int, enable_writes: bool) -> None:
+@click.option(
+    "--doctor",
+    is_flag=True,
+    default=False,
+    help=(
+        "Check that the server can run here and read the Apple Books "
+        "library, print what was found and exit (1 if a check failed). "
+        "Reads only; reports counts, never titles or text."
+    ),
+)
+def main(verbose: int, enable_writes: bool, doctor: bool) -> None:
     """Apple Books MCP Server"""
     if enable_writes:
-        os.environ["APPLE_BOOKS_MCP_ENABLE_WRITES"] = "1"
+        os.environ[ENV_ENABLE_WRITES] = "1"
 
-    # Imported here so --help and --version work even when the server
-    # can't be imported (e.g. an incompatible mcp release).
-    from apple_books_mcp import _cancel_guard
+    if doctor:
+        from apple_books_mcp import doctor as _doctor
+
+        _configure_logging(verbose)
+        sys.exit(_doctor.run())
+
+    # Imported here so --help, --version and --doctor work even when the
+    # server can't be imported (e.g. an incompatible mcp release).
+    from apple_books_mcp import _cancel_guard, _runtime
     from apple_books_mcp.server import mcp, serve
 
     _configure_logging(verbose)
-    writes = os.environ.get("APPLE_BOOKS_MCP_ENABLE_WRITES") == "1"
+    writes = _writes_from_env()
     logger.info(
         "%s, collection writes %s",
         _version_text(),
@@ -95,7 +120,15 @@ def main(verbose: int, enable_writes: bool) -> None:
 
     # Without this, serverInfo.version reports the mcp SDK's version.
     mcp._mcp_server.version = __version__
-    _cancel_guard.install()
+    # Tools move to worker threads only with the cancel guard in place:
+    # older mcp 1.x releases (1.6, for one) let the cancellation of any
+    # call that isn't blocking the event loop shut the server down, and
+    # every 1.x does when a cancel arrives just as a tool's thread
+    # finishes. (doctor._check_server reports the outcome of this.)
+    if _cancel_guard.install():
+        _runtime.install(mcp)
+    else:
+        logger.info("Tools run on the event loop: no cancel guard for this mcp")
     serve()
 
 
