@@ -23,7 +23,7 @@
     --rule: rgba(222, 218, 209, .1);
     --raised: #232321;
     --vignette: rgba(0, 0, 0, .45);
-    --grain: .45;
+    --grain: .31;
     --claude: #cc785c;
     --claude-text: #cc785c;
   }
@@ -35,7 +35,7 @@
       --rule: rgba(31, 31, 29, .12);
       --raised: #f1f0ed;
       --vignette: rgba(31, 31, 29, .07);
-      --grain: .5;
+      --grain: .34;
       --claude-text: #a05036;
     }
   }
@@ -70,7 +70,7 @@
   .grain {
     position: fixed; inset: -120px; z-index: 0; pointer-events: none;
     opacity: var(--grain); mix-blend-mode: overlay; background-size: 160px;
-    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='.6 .6 .6 0 -.4 .6 .6 .6 0 -.4 .6 .6 .6 0 -.4 0 0 0 0 1'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n' color-interpolation-filters='sRGB'><feTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='.6 .6 .6 0 -.4 .6 .6 .6 0 -.4 .6 .6 .6 0 -.4 0 0 0 0 1'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
   }
 
   /* ---------- header (matches the rest of the site) ---------- */
