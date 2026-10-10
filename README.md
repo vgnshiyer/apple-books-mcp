@@ -4,7 +4,7 @@
 
 Model Context Protocol (MCP) server for Apple Books.
 
-[![Website](https://img.shields.io/badge/website-vgnshiyer.me-CC785C)](https://vgnshiyer.me/AppleBooksMcp)
+[![Website](https://img.shields.io/badge/website-vgnshiyer.me-CC785C)](https://vgnshiyer.me/apple-books-mcp/)
 ![](https://badge.mcpx.dev?type=server 'MCP Server')
 [![PyPI](https://img.shields.io/pypi/v/apple-books-mcp.svg)](https://pypi.org/project/apple-books-mcp/)
 [![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](https://opensource.org/licenses/Apache-2.0)

@@ -1,0 +1,332 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="color-scheme" content="dark light">
+<meta name="theme-color" content="#1b1b1a" media="(prefers-color-scheme: dark)">
+<meta name="theme-color" content="#e8e7e3" media="(prefers-color-scheme: light)">
+<title>Apple Books MCP · vgnshiyer</title>
+<meta name="description" content="Apple Books MCP gives Claude access to your books, highlights, and reading progress.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600&family=Geist+Mono&display=swap">
+<link rel="icon" href="/favicon.svg?v=2" type="image/svg+xml">
+<link rel="icon" href="/favicon.png?v=2" sizes="32x32" type="image/png">
+<link rel="apple-touch-icon" href="/apple-touch-icon.png?v=2">
+<style>
+  /* Same colors and grain as vgnshiyer.me, kept inline so this page stands on its own. */
+  :root {
+    --bg: #1b1b1a;
+    --ink: #dedad1;
+    --muted: #8a867d;
+    --rule: rgba(222, 218, 209, .1);
+    --raised: #232321;
+    --vignette: rgba(0, 0, 0, .45);
+    --grain: .45;
+    --claude: #cc785c;
+    --claude-text: #cc785c;
+  }
+  @media (prefers-color-scheme: light) {
+    :root {
+      --bg: #e8e7e3;
+      --ink: #1f1f1d;
+      --muted: #74716b;
+      --rule: rgba(31, 31, 29, .12);
+      --raised: #f1f0ed;
+      --vignette: rgba(31, 31, 29, .07);
+      --grain: .5;
+      --claude-text: #a05036;
+    }
+  }
+
+  *, *::before, *::after { box-sizing: border-box; }
+  html, body { margin: 0; }
+  body {
+    background: var(--bg); color: var(--ink);
+    font-family: "Geist", system-ui, sans-serif;
+    -webkit-font-smoothing: antialiased;
+  }
+  a { color: inherit; text-decoration: none; }
+  button { font: inherit; color: inherit; background: none; border: 0; padding: 0; cursor: pointer; }
+  .mono { font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; letter-spacing: .08em; text-transform: uppercase; }
+
+  .ground {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    background: radial-gradient(120% 90% at 50% 45%, transparent 55%, var(--vignette));
+  }
+  /* Grain sits behind the content so screenshots and video stay clean. */
+  .grain {
+    position: fixed; inset: 0; z-index: 0; pointer-events: none;
+    opacity: var(--grain); mix-blend-mode: overlay; background-size: 160px;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='160' height='160'><filter id='n'><feTurbulence type='fractalNoise' baseFrequency='1.1' numOctaves='2' stitchTiles='stitch'/><feColorMatrix values='.6 .6 .6 0 -.4 .6 .6 .6 0 -.4 .6 .6 .6 0 -.4 0 0 0 0 1'/></filter><rect width='100%25' height='100%25' filter='url(%23n)'/></svg>");
+  }
+
+  /* ---------- header (matches the rest of the site) ---------- */
+
+  .top {
+    position: relative; z-index: 2;
+    display: flex; justify-content: space-between; align-items: flex-start; gap: 16px;
+    padding: 24px 28px;
+  }
+  .name { font-size: 15px; font-weight: 500; line-height: 1; letter-spacing: -.01em; }
+  .views { display: flex; gap: 18px; color: var(--muted); font-family: "Geist Mono", ui-monospace, monospace; font-size: 11px; }
+  .views a { transition: color .2s; }
+  .views a:hover { color: var(--ink); }
+
+  /* ---------- page ---------- */
+
+  main {
+    position: relative; z-index: 1;
+    max-width: 896px; margin: 0 auto;
+    padding: 56px 20px 96px;
+    display: flex; flex-direction: column; gap: 40px;
+  }
+  .intro { display: flex; flex-direction: column; gap: 24px; }
+  .pills { display: flex; flex-wrap: wrap; gap: 8px; }
+  .pill {
+    padding: 6px 12px; border: 1px solid var(--rule); border-radius: 999px;
+    background: var(--raised); color: var(--muted);
+  }
+  .pill[hidden] { display: none; }
+  h1 {
+    margin: 0; max-width: 14em;
+    font-size: clamp(36px, 6vw, 52px); font-weight: 600; line-height: 1.06; letter-spacing: -.03em;
+    text-wrap: balance;
+  }
+  .lede { margin: 0; max-width: 42rem; font-size: 18px; line-height: 1.6; color: var(--muted); }
+  .lede .brand { color: var(--claude-text); }
+  .ctas { display: flex; flex-wrap: wrap; gap: 12px; }
+  .btn {
+    display: inline-flex; align-items: center; justify-content: center;
+    padding: 11px 24px; border-radius: 999px;
+    font-size: 15px; font-weight: 600; transition: opacity .2s, background-color .2s;
+  }
+  .btn.primary { background: var(--claude); color: #1a1a1a; }
+  .btn.primary:hover { opacity: .85; }
+  .btn.secondary { border: 1px solid var(--rule); }
+  .btn.secondary:hover { background: var(--raised); }
+
+  .wide { margin-top: 16px; }
+  .wide video { display: block; width: 100%; border-radius: 16px; background: var(--raised); }
+  @media (min-width: 768px) { .wide { margin-inline: -32px; } }
+  @media (min-width: 1024px) { .wide { margin-inline: -64px; } }
+  @media (min-width: 1280px) { .wide { margin-inline: -96px; } }
+
+  section { display: flex; flex-direction: column; gap: 16px; }
+  .gap { margin-top: 40px; }
+  @media (min-width: 768px) { .gap { margin-top: 64px; } }
+  h2 { margin: 0; font-size: clamp(20px, 2.4vw, 24px); font-weight: 600; letter-spacing: -.02em; }
+  h3 { margin: 0; font-size: clamp(18px, 2vw, 20px); font-weight: 600; letter-spacing: -.015em; }
+
+  .embed { position: relative; aspect-ratio: 16 / 9; overflow: hidden; border-radius: 16px; background: var(--raised); }
+  .embed iframe { position: absolute; inset: 0; width: 100%; height: 100%; border: 0; }
+
+  .features { gap: 64px; }
+  @media (min-width: 768px) { .features { gap: 96px; } }
+  .feature { display: flex; flex-direction: column; gap: 16px; }
+  .feature .copy { display: flex; flex-direction: column; gap: 4px; max-width: 42rem; }
+  .feature .caption { color: var(--muted); line-height: 1.6; }
+  .feature .caption p { margin: 0; }
+  .feature ul { margin: 8px 0 0; padding-left: 20px; }
+  .feature li { margin: 2px 0; }
+  .shot { display: block; width: 100%; overflow: hidden; border-radius: 16px; cursor: zoom-in; transition: opacity .2s; }
+  .shot:hover { opacity: .95; }
+  .shot img { display: block; width: 100%; height: auto; }
+
+  .small { margin: 0; font-size: 14px; color: var(--muted); }
+  .small a, .links a { text-decoration: underline; text-underline-offset: 4px; transition: color .2s; }
+  .small a:hover, .links a:hover { color: var(--ink); }
+  .code { position: relative; border: 1px solid var(--rule); border-radius: 12px; background: var(--raised); }
+  .code pre {
+    margin: 0; padding: 16px 18px; overflow-x: auto;
+    font: 13.5px/1.6 "Geist Mono", ui-monospace, monospace;
+  }
+  .copy-btn {
+    position: absolute; top: 10px; right: 12px;
+    color: var(--muted); opacity: 0; transition: opacity .2s, color .2s;
+  }
+  .code:hover .copy-btn, .copy-btn:focus-visible { opacity: 1; }
+  .copy-btn:hover { color: var(--ink); }
+  @media (hover: none) { .copy-btn { opacity: 1; } }
+
+  .outro { margin: 0; font-size: 18px; color: var(--muted); }
+  .links { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; color: var(--muted); }
+  .links .dot { opacity: .4; }
+
+  dialog.lightbox {
+    max-width: min(1400px, 96vw); max-height: 94vh; padding: 0; border: 0;
+    background: transparent; cursor: zoom-out;
+  }
+  dialog.lightbox::backdrop { background: rgba(0, 0, 0, .85); }
+  dialog.lightbox img { display: block; max-width: 100%; max-height: 92vh; height: auto; border-radius: 12px; }
+
+  @media (max-width: 640px) {
+    .top { padding: 18px 16px; }
+    .views { gap: 14px; }
+    main { padding: 32px 16px 72px; }
+  }
+</style>
+</head>
+<body>
+  <div class="ground"></div>
+  <div class="grain"></div>
+
+  <header class="top">
+    <a class="name" href="/">vgnshiyer.</a>
+    <nav class="views" aria-label="Site">
+      <a href="/">graph</a>
+      <a href="/#list">list</a>
+      <a href="/about/">about</a>
+      <a href="https://x.com/vgnshiyer" target="_blank" rel="noopener">x ↗</a>
+    </nav>
+  </header>
+
+  <main>
+    <div class="intro">
+      <div class="pills">
+        <span class="pill mono">mcp server</span>
+        <span class="pill mono" id="downloads" hidden></span>
+      </div>
+      <h1>A reading copilot for your Apple Books.</h1>
+      <p class="lede">
+        <span class="brand">Apple Books MCP</span> gives Claude access to your books, highlights, and reading progress.
+      </p>
+      <div class="ctas">
+        <a class="btn primary" href="https://github.com/vgnshiyer/apple-books-mcp" target="_blank" rel="noreferrer">Get Started</a>
+        <a class="btn secondary" href="https://pypi.org/project/apple-books-mcp/" target="_blank" rel="noreferrer">View on PyPI</a>
+      </div>
+    </div>
+
+    <div class="wide">
+      <video src="assets/demo.mp4" autoplay loop muted playsinline preload="metadata"></video>
+    </div>
+
+    <section class="gap">
+      <h3>See it in practice.</h3>
+      <div class="embed">
+        <iframe src="https://www.loom.com/embed/f514937433d942249429f79e5f465502" title="Apple Books MCP — walkthrough" allow="fullscreen; picture-in-picture" allowfullscreen loading="lazy"></iframe>
+      </div>
+    </section>
+
+    <section class="gap features">
+      <div class="feature">
+        <div class="copy">
+          <h3>Pick up where you left off</h3>
+          <div class="caption">Claude sees the chapter you're in, what you've highlighted, and where you left the book — ask it anything about what you're reading right now.</div>
+        </div>
+        <button class="shot" type="button" aria-label="Expand image: Pick up where you left off">
+          <img src="assets/pick-up-where-you-left-off.png" width="3416" height="2136" loading="lazy" decoding="async" alt="Claude reading the chapter the user is currently on in The Beginning of Infinity, with the Apple Books app open to the same chapter">
+        </button>
+      </div>
+
+      <div class="feature">
+        <div class="copy">
+          <h3>This week, synthesized</h3>
+          <div class="caption">Your highlights clustered into reading sessions and threaded into a narrative — not a list of quotes, but what you were actually thinking about.</div>
+        </div>
+        <button class="shot" type="button" aria-label="Expand image: This week, synthesized">
+          <img src="assets/weekly-digest.png" width="3456" height="2154" loading="lazy" decoding="async" alt="Claude producing a weekly reading digest clustered into sessions">
+        </button>
+      </div>
+
+      <div class="feature">
+        <div class="copy">
+          <h3>Your library's shape</h3>
+          <div class="caption">Totals, patterns, and honest observations. The themes you actually return to.</div>
+        </div>
+        <button class="shot" type="button" aria-label="Expand image: Your library's shape">
+          <img src="assets/library-summary.png" width="3418" height="2132" loading="lazy" decoding="async" alt="Claude summarizing the shape of the reader's library with stats and observations">
+        </button>
+      </div>
+
+      <div class="feature">
+        <div class="copy">
+          <h3>One-click workflows</h3>
+          <div class="caption">
+            <p>Prompts and an attachable resource, right in Claude's picker:</p>
+            <ul>
+              <li>weekly_digest</li>
+              <li>explain_recent_highlight</li>
+              <li>what_am_i_reading</li>
+              <li>library_snapshot</li>
+              <li>revisit_book</li>
+              <li>Attach Currently Reading</li>
+            </ul>
+          </div>
+        </div>
+        <button class="shot" type="button" aria-label="Expand image: One-click workflows">
+          <img src="assets/prompts-menu.png" width="3432" height="2100" loading="lazy" decoding="async" alt="Claude Desktop prompt picker showing Apple Books MCP prompts and the Currently Reading resource">
+        </button>
+      </div>
+    </section>
+
+    <section class="gap">
+      <h2>Quickstart</h2>
+      <p class="small">Requires <a href="https://docs.astral.sh/uv/" target="_blank" rel="noreferrer">uv</a> on macOS.</p>
+      <div class="code">
+        <pre><code>brew install uv
+uvx apple-books-mcp</code></pre>
+        <button class="copy-btn mono" type="button">copy</button>
+      </div>
+      <p class="small">Then add to your Claude Desktop config. Your data stays local.</p>
+      <div class="code">
+        <pre><code>{
+  "mcpServers": {
+    "apple-books": {
+      "command": "uvx",
+      "args": ["apple-books-mcp@latest"]
+    }
+  }
+}</code></pre>
+        <button class="copy-btn mono" type="button">copy</button>
+      </div>
+    </section>
+
+    <section class="gap">
+      <p class="outro">Local-first. Open source. Made for readers.</p>
+      <div class="links">
+        <a href="https://github.com/vgnshiyer/apple-books-mcp" target="_blank" rel="noreferrer">GitHub</a>
+        <span class="dot">•</span>
+        <a href="https://pypi.org/project/apple-books-mcp/" target="_blank" rel="noreferrer">PyPI</a>
+        <span class="dot">•</span>
+        <a href="https://registry.modelcontextprotocol.io/v0.1/servers?search=io.github.vgnshiyer/apple-books-mcp" target="_blank" rel="noreferrer">MCP Registry</a>
+      </div>
+    </section>
+  </main>
+
+  <dialog class="lightbox" id="lightbox"><img alt=""></dialog>
+
+<script>
+  // All-time downloads, read from pepy.tech's badge (the only keyless source of the total).
+  fetch('https://static.pepy.tech/badge/apple-books-mcp')
+    .then(r => r.ok ? r.text() : Promise.reject())
+    .then(svg => {
+      const texts = [...svg.matchAll(/>([^<>]+)<\/text>/g)].map(m => m[1].trim());
+      const count = texts.find(t => /^[\d.,]+[kM]?$/.test(t));
+      if (!count) return;
+      const pill = document.getElementById('downloads');
+      pill.textContent = `${count} downloads`;
+      pill.hidden = false;
+    })
+    .catch(() => {});
+
+  const lightbox = document.getElementById('lightbox');
+  document.querySelectorAll('.shot').forEach(btn => btn.addEventListener('click', () => {
+    const img = btn.querySelector('img');
+    lightbox.querySelector('img').src = img.src;
+    lightbox.querySelector('img').alt = img.alt;
+    lightbox.showModal();
+  }));
+  lightbox.addEventListener('click', () => lightbox.close());
+
+  document.querySelectorAll('.copy-btn').forEach(btn => btn.addEventListener('click', async () => {
+    try {
+      await navigator.clipboard.writeText(btn.parentElement.querySelector('pre').textContent);
+      btn.textContent = 'copied';
+      setTimeout(() => { btn.textContent = 'copy'; }, 2000);
+    } catch {}
+  }));
+</script>
+</body>
+</html>
