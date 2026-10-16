@@ -1,7 +1,7 @@
 # Deprecated (see README): a Linux container can't be granted the macOS
 # permission, reach iCloud book files or tell whether Books is running.
 # Pinned by digest; Dependabot proposes updates.
-FROM python:3.13-slim@sha256:7c61056e61ac89e852de05f3dc6fa51a6dd2181797bceed46aa725dd7cb2cd3b
+FROM python:3.14-slim@sha256:a2b82f3c48559aa0a8446d9af49826b6e2b2016f4cd2afabfe6013ec53729170
 
 WORKDIR /app
 
